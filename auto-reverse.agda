@@ -7,47 +7,64 @@ open import Agda.Builtin.Equality
 open import Agda.Builtin.String
 open import Agda.Builtin.Nat renaming (_+_ to _+N_; _*_ to _*N_)
 
+open import Term using (Term'; Type'; Term-to-Term'; Term'-to-Term)
+
 
 pattern default-modality = modality relevant quantity-ω
 
- -- In various places vArg is the only type of arg we support
-pattern vArg x = arg (arg-info visible   default-modality) x
-pattern hArg x = arg (arg-info hidden    default-modality) x
-pattern iArg x = arg (arg-info instance′ default-modality) x
-
- -- TODO: Import these list functions from somewhere else...
-list-map : {A B : Set} -> (A -> B) -> List A -> List B
-list-map f [] = []
-list-map f (a ∷ as) = f a ∷ (list-map f as)
-
-list-reverse : {A : Set} -> List A -> List A
-list-reverse = go []
-  where go : {A : Set} -> List A -> List A -> List A
-        go acc [] = acc
-        go acc (a ∷ as) = go (a ∷ acc) as
-
-list-index : {A : Set} -> Nat -> List A -> TC A
-list-index _       []       = typeError (strErr "List index error" ∷ [])
-list-index zero    (a ∷ _)  = returnTC a
-list-index (suc n) (_ ∷ as) = list-index n as
-
-list-concat : {A : Set} -> List (List A) -> List A
-list-concat [] = []
-list-concat ([] ∷ ass) = list-concat ass
-list-concat ((a ∷ as) ∷ ass) = a ∷ list-concat (as ∷ ass)
+ -- In various places varg is the only type of arg we support
+pattern varg x = arg (arg-info visible   default-modality) x
+pattern harg x = arg (arg-info hidden    default-modality) x
+pattern iarg x = arg (arg-info instance′ default-modality) x
 
 str-eq : String -> String -> Bool
 str-eq = primStringEquality
 
+record One : Set where
+  constructor <>
+
 data _+_ (A B : Set) : Set where
- inl : A -> A + B
- inr : B -> A + B
+ inl : A -> (A + B)
+ inr : B -> (A + B)
 
 _*_ : Set -> Set -> Set
 A * B = Σ A \ _ -> B
 
 infixr 4 _+_
 infixr 5 _*_
+
+data SnocList (A : Set) : Set where
+  [] : SnocList A
+  _-,_ : SnocList A -> A -> SnocList A
+
+infixl 1 _-,_
+
+Telescope : Set
+Telescope = List (String * Type)
+
+Context : Set
+Context = SnocList (String * Type)
+
+ -- TODO: Import these list functions from somewhere else...
+list-map : {A B : Set} -> (A -> B) -> List A -> List B
+list-map f [] = []
+list-map f (a ∷ as) = f a ∷ (list-map f as)
+
+list-reverse : {A : Set} -> List A -> SnocList A
+list-reverse = go []
+  where go : {A : Set} -> SnocList A -> List A -> SnocList A
+        go acc [] = acc
+        go acc (a ∷ as) = go (acc -, a) as
+
+slist-index : {A : Set} -> Nat -> SnocList A -> TC A
+slist-index _       []       = typeError (strErr "List index error" ∷ [])
+slist-index zero    (_ -, a)  = returnTC a
+slist-index (suc n) (as -, _) = slist-index n as
+
+list-concat : {A : Set} -> List (List A) -> List A
+list-concat [] = []
+list-concat ([] ∷ ass) = list-concat ass
+list-concat ((a ∷ as) ∷ ass) = a ∷ list-concat (as ∷ ass)
 
  -- Reversible syntax
 data RevPat : Set where
@@ -63,6 +80,13 @@ data RevBranch : Set where
     -> (outp : RevPat) -> RevBranch
   cons : (tel : List (String * Type)) (inp argp : RevPat)
     -> (rev-fn : RevFn) (rest : RevBranch) -> RevBranch
+
+{-
+eg-rev = (\ x ->
+    x $| rev-fn2 |$ (\ (y , z) ->
+    y $| rev-fn1 |$ (\ w
+  -> w , z)))
+-}
 
  -- Only allow branching at the top level of a reversible term.
  -- I think this will simplify the reversal transformation and
@@ -87,7 +111,7 @@ record _<->_ (A B : Set) : Set where
     -}
 
 open _<->_
-infix 5 _<->_
+infix 1 _<->_
 
 un : {A B : Set} -> (A <-> B) -> B <-> A
 un f = MkRev (unapply f) {apply f}
@@ -100,15 +124,15 @@ a $| f |$ g = g (apply f a)
  -- will throw an error. We use the same ok patterns
  -- to reconstruct a Term from a RevTerm...
 pattern ok-pat-lam cs = pat-lam cs []
-pattern ok-clause tel inp term = clause tel ((vArg inp) ∷ []) term
+pattern ok-clause tel inp term = clause tel ((varg inp) ∷ []) term
 pattern ok-cons argty outty-local outty argp rev-fn rest-clause =
   def (quote _$|_|$_) (
-          hArg argty ∷
-          hArg outty-local ∷
-          hArg outty ∷
-          vArg argp ∷
-          vArg rev-fn ∷
-          vArg (pat-lam (rest-clause ∷ []) []) ∷ [])
+          harg argty ∷
+          harg outty-local ∷
+          harg outty ∷
+          varg argp ∷
+          varg rev-fn ∷
+          varg (pat-lam (rest-clause ∷ []) []) ∷ [])
 
 
 non-lam-err : ∀ {a} {A : Set a} -> Term -> TC A
@@ -156,9 +180,6 @@ mapRP f (var x) =
   bindTC (f x) \ fx ->
   returnTC (var fx)
 
-Telescope : Set
-Telescope = List (String * Type)
-
 strip-info : {A : Set} -> Arg A -> A
 strip-info (arg _ x) = x
 
@@ -174,7 +195,7 @@ Term-to-RevTerm (ok-pat-lam cs) inty outty =
     where
     helper : List (Arg Pattern) -> TC (List RevPat)
     helper [] = returnTC []
-    helper ((vArg p) ∷ ps) =
+    helper ((varg p) ∷ ps) =
       bindTC (Pattern-to-RevPat p) \ p -> 
       bindTC (helper ps) \ ps -> returnTC (p ∷ ps)
     helper _ = explicit-pattern-error
@@ -189,13 +210,13 @@ Term-to-RevTerm (ok-pat-lam cs) inty outty =
     where
     process-subterms : List (Arg Term) -> TC (List RevPat)
     process-subterms [] = returnTC []
-    process-subterms (hArg unknown ∷ args) = process-subterms args
-    process-subterms (hArg _       ∷ args) =
+    process-subterms (harg unknown ∷ args) = process-subterms args
+    process-subterms (harg _       ∷ args) =
       typeError (strErr "Explicitly providing implicit arguments to constructors is not supported." ∷ [])
-    process-subterms (iArg unknown ∷ args) = process-subterms args
-    process-subterms (iArg _       ∷ args) =
+    process-subterms (iarg unknown ∷ args) = process-subterms args
+    process-subterms (iarg _       ∷ args) =
       typeError (strErr "Explicitly providing instance arguments to constructors is not supported." ∷ [])
-    process-subterms (vArg a ∷ args) =
+    process-subterms (varg a ∷ args) =
       bindTC   (Term-to-RevPat  a)    \ a    ->
       bindTC   (process-subterms args) \ args ->
       returnTC (a ∷ args)
@@ -213,7 +234,7 @@ Term-to-RevTerm (ok-pat-lam cs) inty outty =
     returnTC (inl p)
 
   to-RevBranch (ok-clause tel inp t) =
-    bindTC (mapTC (\ { (n , vArg a) -> returnTC (n , a)
+    bindTC (mapTC (\ { (n , varg a) -> returnTC (n , a)
                      ; _            -> tel-explicit-error }) tel) \ tel ->
     bindTC (Pattern-to-RevPat inp) \ inp ->
     bindTC (process-term t) \ 
@@ -238,16 +259,16 @@ RevTerm-to-Term (top branches _ outty) =
     returnTC (con c args)
     where
     fill-unknowns : Type -> List RevPat -> TC (List (Arg Term))
-    fill-unknowns (pi (vArg _) (abs _ ty)) (p ∷ ps) =
+    fill-unknowns (pi (varg _) (abs _ ty)) (p ∷ ps) =
       bindTC (RevPat-to-Term p) \ t ->
       bindTC (fill-unknowns ty ps) \ args ->
-      returnTC (vArg t ∷ args)
-    fill-unknowns (pi (hArg _) (abs _ ty)) ps =
+      returnTC (varg t ∷ args)
+    fill-unknowns (pi (harg _) (abs _ ty)) ps =
       bindTC (fill-unknowns ty ps) \ args ->
-      returnTC (hArg unknown ∷ args)
-    fill-unknowns (pi (iArg _) (abs _ ty)) ps = 
+      returnTC (harg unknown ∷ args)
+    fill-unknowns (pi (iarg _) (abs _ ty)) ps = 
       bindTC (fill-unknowns ty ps) \ args ->
-      returnTC (iArg unknown ∷ args)
+      returnTC (iarg unknown ∷ args)
     fill-unknowns _ [] = returnTC []
     fill-unknowns _ _  = typeError (strErr "Error filling constructor unknown args." ∷ [])
   RevPat-to-Term (var x) = returnTC (var x [])
@@ -257,12 +278,12 @@ RevTerm-to-Term (top branches _ outty) =
     where
     helper : List RevPat -> List (Arg Pattern)
     helper [] = []
-    helper (p ∷ ps) = (vArg (RevPat-to-Pattern p)) ∷ helper ps
+    helper (p ∷ ps) = (varg (RevPat-to-Pattern p)) ∷ helper ps
   RevPat-to-Pattern (var x) = var x
 
   mk-clause : Telescope -> RevPat -> Term -> Clause
   mk-clause tel inp t =
-    ok-clause (list-map (\ (n , ty) -> n , vArg ty) tel) (RevPat-to-Pattern inp) t
+    ok-clause (list-map (\ (n , ty) -> n , varg ty) tel) (RevPat-to-Pattern inp) t
 
   process-branch : (outty : Type) -> RevBranch -> TC Clause
   process-branch _ (bottom tel inp outp) =
@@ -280,45 +301,81 @@ fn-to-RevTerm {A} {B} apply =
   bindTC (quoteTC B) \ B-term ->
   (Term-to-RevTerm apply-term A-term B-term)
 
- -- Map name to De Bruijn index, assuming tel has been reversed.
-telescope-lookup : String -> Telescope -> TC Nat
-telescope-lookup = go 0
-  where go : Nat -> String -> Telescope -> TC Nat
+ -- Map name to De Bruijn index.
+lookup : String -> Context -> TC Nat
+lookup = go 0
+  where go : Nat -> String -> Context -> TC Nat
         go n s [] = typeError (strErr "Telescope lookup error" ∷ [])
-        go n s ((r , _) ∷ tel) with str-eq s r
+        go n s (tel -, (r , _)) with str-eq s r
         ... | false = go (suc n) s tel
         ... | true  = returnTC n
 
-update-debruijn : Telescope -> Telescope -> RevPat -> TC RevPat
-update-debruijn oldtel newtel = mapRP \ x ->
-  bindTC (list-index x oldtel) \ (nm , _) -> 
-  telescope-lookup nm newtel
+update-debruijn : Context -> Context -> RevPat -> TC RevPat
+update-debruijn oldctx newctx = mapRP \ x ->
+  bindTC (slist-index x oldctx) \ (nm , _) -> 
+  lookup nm newctx
+
+Level : Set
+Level = Nat + Nat -- Left branch represents negative levels,
+                  -- right branch non-negative.
+
+idx-to-lvl : (depth : Nat) -> Nat -> Level
+idx-to-lvl depth       zero      = inr depth 
+idx-to-lvl zero        (suc idx) = inl idx
+idx-to-lvl (suc depth) (suc idx) = idx-to-lvl depth idx
+
+idx-to-lvl' : (depth : Nat) -> Nat -> TC Nat
+idx-to-lvl' depth       zero      = returnTC depth
+idx-to-lvl' zero        (suc idx) = typeError {!!}
+idx-to-lvl' (suc depth) (suc idx) = idx-to-lvl' depth idx
+
+lvl-to-idx : (depth : Nat) -> Level -> Nat
+lvl-to-idx depth (inl level) = {!!}
+lvl-to-idx depth (inr level) = {!!}
 
  -- Turn a branch 'inside-out'
-reverse-branch : (outty : Type) -> RevBranch -> TC RevBranch
-reverse-branch _ (bottom tel inp outp) =
-  let telr = list-reverse tel in
-  bindTC (make-newtel telr outp) \ newtel ->
-  let newtelr = list-reverse newtel in
-  bindTC (update-debruijn telr newtelr inp) \ newoutp -> 
-  bindTC (update-debruijn telr newtelr outp) \ newinp -> 
+reverse-branch : RevBranch -> TC RevBranch
+reverse-branch (bottom tel inp outp) =
+  let ctx = list-reverse tel in
+  bindTC (make-newtel ctx outp) \ (newtel , perm) ->
+  let newctx = list-reverse newtel in
+  bindTC (update-debruijn ctx newctx inp) \ newoutp -> 
+  bindTC (update-debruijn ctx newctx outp) \ newinp -> 
   returnTC (bottom newtel newinp newoutp)
   where
-  make-newtels : Telescope -> List RevPat -> TC (List Telescope)
-  make-newtel  : Telescope -> RevPat -> TC Telescope
-  make-newtel tel (con _ ps) = 
-    bindTC (make-newtels tel ps) \ newtels ->
-    returnTC (list-concat newtels)
-  make-newtel tel (var x) =
-    bindTC (list-index x tel) \ nmty ->
-    returnTC (nmty ∷ [])
-
-  make-newtels tel [] = returnTC []
-  make-newtels tel (p ∷ ps) = 
-    bindTC (make-newtel tel p)   \ newtel ->
-    bindTC (make-newtels tel ps) \ newtels ->
-    returnTC (newtel ∷ newtels)
-reverse-branch outty (cons tel inp argp rev-fn rest) =
+  make-newtel : Context -> RevPat -> TC (Telescope * List Nat)
+  make-newtel ctx (con _ ps) = 
+    bindTC (helper ps) returnTC 
+    where
+    helper : List RevPat -> TC (Telescope * List Nat)
+    helper [] = returnTC ([] , [])
+    helper (p ∷ ps) =
+      bindTC (make-newtel ctx p) \ (newtel , newperm) ->
+      bindTC (helper ps) \ (newtels , newperms) ->
+      returnTC ((list-concat (newtel  ∷ newtels  ∷ [])) , 
+                 list-concat (newperm ∷ newperms ∷ []))
+  make-newtel ctx (var x) =
+    bindTC (slist-index x ctx) \ nmty ->
+    returnTC (nmty ∷ [] , x ∷ [])
+ 
+ -- Strategy here:
+ --   First compute the full context for the reversed
+ --   branch. We need to do this so that we can replace
+ --   binders with correct de Bruijn indices. Hopefully
+ --   during this pass we can also check for non-linearity.
+ --   need to particularly watch out for multiple usage
+ --   (as opposed to zero usage), because I multi-use
+ --   could cause silent failure (it would basically result
+ --   in shadowing). The variables at the beginning of
+ --   the old branch need to be at the outermost layer of
+ --   the new context list as they will be processed first.
+ --
+ --   Simultaneously work forwards through the old branch
+ --   and the new full context to generate the new branch.
+ --   It will be necessary to build up a full copy of the old
+ --   context as we work down, so that variables can be looked
+ --   up using their old de Bruijn indices.
+reverse-branch (cons tel inp argp rev-fn rest) =
   let telr = list-reverse tel in
   rec {!!} rest
   where
@@ -330,13 +387,23 @@ reverse-branch outty (cons tel inp argp rev-fn rest) =
 
 reverse : RevTerm -> TC RevTerm
 reverse (top branches inty outty) = 
-  bindTC (mapTC (reverse-branch outty) branches) \ branches ->
+  bindTC (mapTC reverse-branch branches) \ branches ->
   returnTC (top branches outty inty)
 
 reverse-tactic apply hole =
   bindTC (fn-to-RevTerm apply) \ t ->
   bindTC (reverse t) \ rt ->
-  bindTC (RevTerm-to-Term rt) (unify hole)
+  bindTC (RevTerm-to-Term rt)
+  {-
+  bindTC (quoteTC t) \ t' ->
+  bindTC (normalise t') \ t' ->
+  bindTC getContext \ ctx ->
+  bindTC (quoteTC ctx) \ ctx' ->
+  typeError ({!termErr ctx'!} ∷ [])
+  -}
+   --
+  (unify hole)
+  
 
 
  -- TESTS
@@ -348,7 +415,6 @@ dont-reverse {A} {B} apply hole =
   bindTC (quoteTC A) \ A-term ->
   bindTC (quoteTC B) \ B-term ->
   bindTC (Term-to-RevTerm apply-term A-term B-term) \ rt ->
-  bindTC (quoteTC rt) \ rt-term ->
   bindTC (RevTerm-to-Term rt) \ t ->
   unify hole t
 
@@ -391,21 +457,43 @@ rev-fn2 = {!!}
 rev-fn3 : (Nat * Nat) <-> Nat
 rev-fn3 = {!!}
 
-{-->-to-<-> (\ x ->
-    x $| rev-fn2 |$ \ (y , z) ->
-    y $| rev-fn1 |$ \ w
-  -> w , z)-}
+{-
+
+eg-rev = (\ x ->
+    x $| rev-fn2 |$ (\ (y , z) ->
+    y $| rev-fn1 |$ (\ w
+  -> w , z)))
+
+\ (w , z) ->
+  w $| un rev-fn1 |$ \ y ->
+
+
+\ x ->
+  let (y , z) = rev-fn2 x
+      w       = rev-fn1 y
+      
+-}
+
 {-
 id : {A : Set} -> A <-> A
 id = MkRev (\ { x -> x })
 -}
 
-swap-rev : (Nat * Nat) <-> (Nat * Nat)
-swap-rev = MkRev (\ { (x , y) -> (y , x) })
+swap-rev : Nat * Nat <-> Nat * Nat
+swap-rev = MkRev \ { (x , y) -> (y , x) }
 
 swap-rev-p1 : forall x -> unapply swap-rev (apply swap-rev x) ≡ x
 swap-rev-p1 x = refl
 
+case-rev : (Nat + Nat) <-> (Nat + Nat)
+case-rev = MkRev \
+  { (inl x) -> inr x ;
+    (inr y) -> inl y }
+
+{-
+swap-rev2 : {A B : Set} -> A * B <-> B * A
+swap-rev2 = MkRev \ { (x , y) -> (y , x) }
+-}
 {-
 example : Term
 example = lam visible (abs "x"
