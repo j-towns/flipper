@@ -72,19 +72,22 @@ C-lookup (ctx -, (nm , ty)) v with str-eq nm v
   returnTC (suc i)
 ... | true  = returnTC zero
 
+ -- The right branch denotes hidden variables, uses of which should be replaced by `unknown`
 QContext : Set
-QContext = SnocList (Quant * String * Type')
+QContext = SnocList (Quant * String * Type' + One)
 
-QC-index : QContext -> Nat -> TC (String * Type')
-QC-index []                           i       = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
-QC-index (ctx -, (zero , (nm , _))) zero    = typeError (strErr "Reference to used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
-QC-index (ctx -, (one ,  nmty))     zero    = returnTC nmty
+QC-index : QContext -> Nat -> TC (String * Type' + One)
+QC-index []                           i     = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
+QC-index (ctx -, inl (zero , (nm , _))) zero    = typeError (strErr "Reference to used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
+QC-index (ctx -, inl (one ,  nmty))     zero    = returnTC (inl nmty)
+QC-index (ctx -, inr <>)                zero    = returnTC (inr <>)
 QC-index (ctx -, _)                  (suc i) = QC-index ctx i
 
 QC-use : QContext -> Nat -> TC (QContext * String * Type')
 QC-use [] i = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
-QC-use (ctx -, (zero , nm , _)) zero = typeError (strErr "Attempt to re-use used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
-QC-use (ctx -, (one , nmty)) zero = returnTC ((ctx -, (zero , nmty)) , nmty)
+QC-use (ctx -, inl (zero , nm , _)) zero = typeError (strErr "Attempt to re-use used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
+QC-use (ctx -, inl (one , nmty)) zero = returnTC ((ctx -, inl (zero , nmty)) , nmty)
+QC-use (ctx -, inr <>) zero = typeError (strErr "Attempt to use hidden variable." ∷ [])
 QC-use (ctx -, x) (suc i) =
   bindTC (QC-use ctx i) \ (ctx , nmty) ->
   returnTC ((ctx -, x) , nmty)
@@ -92,15 +95,16 @@ QC-use (ctx -, x) (suc i) =
 Term-to-Term' : QContext -> Term -> TC Term'
 Term-to-Term' ctx = helper zero
   where
-  convert-var : (depth : Nat) -> (x : Nat) -> TC Var
+  convert-var : (depth : Nat) -> (x : Nat) -> TC (Var + One)
   convert-var depth x with x <N depth
   convert-var depth x | false with x <N depth +N (slist-length ctx)
   convert-var depth x | false | false = 
-    returnTC (outer-db (x -N (depth +N (slist-length ctx))))
+    returnTC (inl (outer-db (x -N (depth +N (slist-length ctx)))))
   convert-var depth x | false | true = 
-    bindTC (QC-index ctx (x -N depth)) \ (nm , _) ->
-    returnTC (rev nm)
-  convert-var depth x | true = returnTC (inner-db x)
+    bindTC (QC-index ctx (x -N depth)) \
+      { (inl (nm , _)) -> returnTC (inl (rev nm))
+      ; (inr <>)       -> returnTC (inr <>) }
+  convert-var depth x | true = returnTC (inl (inner-db x))
 
   args-helper : Nat -> List (Arg Term) -> TC (List (Arg Term'))
   clauses-helper : Nat -> List Clause -> TC (List Clause')
@@ -109,9 +113,11 @@ Term-to-Term' ctx = helper zero
   helper : Nat -> Term -> TC Term'
   
   helper depth (var x args) =
-    bindTC (convert-var depth x) \ x ->
-    bindTC (args-helper depth args) \ args ->
-    returnTC (var x args)
+    bindTC (convert-var depth x) \
+      { (inl x) ->
+          bindTC (args-helper depth args) \ args ->
+          returnTC (var x args)
+      ; (inr <>) -> returnTC unknown }
   helper depth (con c args) =
     bindTC (args-helper depth args) \ args ->
     returnTC (con c args)
@@ -180,13 +186,18 @@ Term-to-Term' ctx = helper zero
       bindTC (helper depth t) \ t ->
       returnTC (dot t)
     Pattern-to-Pattern' (var x) = 
-      bindTC (convert-var depth x) \ x ->
-      returnTC (var x)
+      bindTC (convert-var depth x) \
+        { (inl x) -> returnTC (var x)
+         -- Pretty sure this is unreachable, since pattern variables only refer to the
+         -- telescope of the clause in which they are introduced.
+        ; (inr <>) -> typeError (strErr "Reference to hidden var in pattern." ∷ [])  }
     Pattern-to-Pattern' (lit l) = returnTC (lit l)
     Pattern-to-Pattern' (proj f) = returnTC (proj f)
     Pattern-to-Pattern' (absurd x) = 
-      bindTC (convert-var depth x) \ x ->
-      returnTC (absurd x)
+      bindTC (convert-var depth x) \
+        { (inl x)  -> returnTC (absurd x)
+         -- Pretty sure this is unreachable, same reason as above.
+        ; (inr <>) -> typeError (strErr "Reference to hidden var in pattern." ∷ [])  }
 
   tel-helper depth [] = returnTC []
   tel-helper depth ((nm , arg i ty) ∷ tel) = 

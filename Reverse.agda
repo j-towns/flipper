@@ -1,3 +1,5 @@
+{-# OPTIONS --no-forcing #-}
+
 open import Agda.Builtin.Reflection
 open import Agda.Builtin.Sigma
 open import Agda.Builtin.Unit
@@ -13,8 +15,8 @@ open import Util
 
  -- Reversible syntax
 data RevPat : Set where
-  con : (c : Name) (ps : List RevPat) -> RevPat
-  var : (nm : String) (ty : Type') -> RevPat
+  con : (c : Name)(ps : List RevPat) -> RevPat
+  var : (nm : String)(ty : Type') -> RevPat
    -- TODO: Add absurd
 
 record RevFn : Set where
@@ -22,7 +24,6 @@ record RevFn : Set where
   constructor MkRevFn
   field
     fn : Term'
-    inty outty : Type'
 
 record RevEqn : Set where
   pattern
@@ -45,11 +46,10 @@ record RevTerm : Set where
   constructor MkRT
   field
     branches : List RevBranch
-    inty outty : Type'
 
 reverse : RevTerm -> RevTerm
 RevTerm-to-Term : RevTerm -> TC Term
-Term-to-RevTerm : Term -> (inty outty : Type) -> TC RevTerm
+Term-to-RevTerm : Term -> TC RevTerm
 reverse-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
 
 record _<->_ (A B : Set) : Set where
@@ -74,28 +74,30 @@ _$|_|$_ : {A B C : Set} -> A -> (A <-> B) -> (B -> C) -> C
 a $| f |$ g = g (apply f a)
 
 
-reverse (MkRT branches inty outty) = MkRT (list-map reverse-br branches) outty inty
+reverse (MkRT branches) = MkRT (list-map reverse-br branches)
   where
   reverse-br : RevBranch -> RevBranch
-  reverse-br (branch inp eqns outp) = branch outp (list-reverse' (list-map reverse-eqn eqns)) inp
+  reverse-br (branch inp eqns outp) =
+    branch outp (list-reverse' (list-map reverse-eqn eqns)) inp
     where
     reverse-eqn : RevEqn -> RevEqn
-    reverse-eqn (MkRevEqn argp (MkRevFn fn inty outty) resp) =
-      MkRevEqn resp (MkRevFn (def (quote un) (harg inty ∷ harg outty ∷ varg fn ∷ [])) outty inty) argp
+    reverse-eqn (MkRevEqn argp (MkRevFn fn) resp) =
+      MkRevEqn resp (MkRevFn (def (quote un) (varg fn ∷ []))) argp
 
-reverse-tactic {inty} {outty} apply hole = 
-  bindTC (quoteTC inty) \ inty ->
-  bindTC (quoteTC outty) \ outty ->
+reverse-tactic apply hole = 
   bindTC (quoteTC apply) \ term ->
-  {-
-  bindTC (quoteTC term) \ t ->
-  typeError (termErr t ∷ [])
-  -}
-  bindTC (Term-to-RevTerm term inty outty) \ rt ->
+  bindTC (Term-to-RevTerm term) \ rt ->
   let rt = reverse rt in
   bindTC (RevTerm-to-Term rt) \ term ->
-  unify hole term
 
+  {-
+  withNormalisation true (
+    bindTC (quoteTC term) \ `t ->
+    typeError (termErr `t ∷ [])
+  )
+  -}
+  
+  unify hole term
   
 
  -- We use pattern matching on these 'ok' forms to lossily
@@ -104,27 +106,27 @@ reverse-tactic {inty} {outty} apply hole =
  -- to reconstruct a Term from a RevTerm...
 pattern ok-pat-lam cs = pat-lam cs []
 pattern ok-clause tel inp term = clause tel ((varg inp) ∷ []) term
-pattern ok-cons argty resty outty-global argpat rev-fn res-tel respat rest-term =
+pattern ok-cons argpat rev-fn res-tel respat rest-term =
   def (quote _$|_|$_) (
-          harg argty ∷
-          harg resty ∷
-          harg outty-global ∷
+          harg _ ∷
+          harg _ ∷
+          harg _ ∷
           varg argpat ∷
           varg rev-fn ∷
           varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
 
-Term-to-RevTerm (ok-pat-lam cs) inty outty = 
+Term-to-RevTerm (ok-pat-lam cs) = 
   bindTC (mapTC process-branch cs) \ bs ->
-  bindTC (Term-to-Term' [] inty) \ inty ->
-  bindTC (Term-to-Term' [] outty) \ outty ->
-  returnTC (MkRT bs inty outty)
+  returnTC (MkRT bs)
   where
   process-tel : QContext -> List (String * Arg Type) -> TC QContext
   process-tel ctx [] = returnTC ctx
   process-tel ctx ((nm , varg ty) ∷ tel) = 
     bindTC (Term-to-Term' ctx ty) \ ty ->
-    process-tel (ctx -, (one , nm , ty)) tel
-  process-tel ctx ((nm , _) ∷ _) = typeError (strErr "Non-visible element in telescope." ∷ [])
+    process-tel (ctx -, inl (one , nm , ty)) tel
+  process-tel ctx ((_ , harg _) ∷ tel) = process-tel ctx tel
+  process-tel ctx ((_ , iarg _) ∷ tel) = process-tel ctx tel
+  process-tel ctx ((nm , _) ∷ _) = typeError (strErr "Invalid element in telescope." ∷ [])
 
   Pattern-to-RevPat : QContext -> Pattern -> TC RevPat
   Pattern-to-RevPat ctx (con c ps) =
@@ -139,8 +141,10 @@ Term-to-RevTerm (ok-pat-lam cs) inty outty =
       returnTC (p ∷ ps)
     helper (_ ∷ ps) = helper ps -- typeError (strErr "Non-visible element in pattern." ∷ [])
   Pattern-to-RevPat ctx (var x) = 
-    bindTC (QC-index ctx x) \ (nm , ty) ->
-    returnTC (var nm ty)
+    bindTC (QC-index ctx x) \
+      { (inl (nm , ty)) -> returnTC (var nm ty)
+       -- Think this should be unreachable:
+      ; (inr <>)        -> typeError (strErr "Hidden variable at top level of pattern." ∷ []) }
   Pattern-to-RevPat ctx p = typeError (strErr "Patterns must either be variables or constructors" ∷ [])
 
   Term-to-RevPat : QContext -> Term -> TC (QContext * RevPat)
@@ -153,12 +157,8 @@ Term-to-RevTerm (ok-pat-lam cs) inty outty =
     where
     args-helper : QContext -> List (Arg Term) -> TC (QContext * List RevPat)
     args-helper ctx [] = returnTC (ctx , [])
-    args-helper ctx (harg u ∷ args) = args-helper ctx args
-    -- args-helper ctx (harg _       ∷ args) =
-    --  typeError (strErr "Explicitly providing implicit arguments to constructors is not supported." ∷ [])
-    args-helper ctx (iarg unknown ∷ args) = args-helper ctx args
-    args-helper ctx (iarg _       ∷ args) =
-      typeError (strErr "Explicitly providing instance arguments to constructors is not supported." ∷ [])
+    args-helper ctx (harg _ ∷ args) = args-helper ctx args
+    args-helper ctx (iarg _ ∷ args) = args-helper ctx args
     args-helper ctx (varg a ∷ args) =
       bindTC   (Term-to-RevPat ctx a) \ (ctx , a) ->
       bindTC   (args-helper ctx args) \ (ctx , args) ->
@@ -167,15 +167,13 @@ Term-to-RevTerm (ok-pat-lam cs) inty outty =
   Term-to-RevPat ctx t = typeError (strErr "Argument/output must be a variable or constructor" ∷ [])
   
   process-term : QContext -> Term -> TC (List RevEqn * RevPat)
-  process-term ctx (ok-cons argty resty _ argpat rev-fn res-tel respat rest-term) = 
-    bindTC (Term-to-Term' ctx argty) \ argty ->
-    bindTC (Term-to-Term' ctx resty) \ resty ->
+  process-term ctx (ok-cons argpat rev-fn res-tel respat rest-term) = 
     bindTC (Term-to-RevPat ctx argpat) \ (ctx , argpat) ->
     bindTC (Term-to-Term' ctx rev-fn) \ rev-fn ->
     bindTC (process-tel ctx res-tel) \ ctx ->
     bindTC (Pattern-to-RevPat ctx respat) \ respat ->
     bindTC (process-term ctx rest-term) \ (eqns , outp) ->
-    returnTC ((MkRevEqn argpat (MkRevFn rev-fn argty resty) respat ∷ eqns) , outp)
+    returnTC ((MkRevEqn argpat (MkRevFn rev-fn) respat ∷ eqns) , outp)
   process-term ctx t = 
     bindTC (Term-to-RevPat ctx t) \ (ctx , outp) ->
      -- TODO: Check that all variables in ctx have  been used
@@ -188,9 +186,9 @@ Term-to-RevTerm (ok-pat-lam cs) inty outty =
     bindTC (process-term ctx term) \ (eqns , outp) ->
     returnTC (branch inp eqns outp)
   process-branch c = typeError (strErr "Clauses must have exactly one bound pattern." ∷ [])
-Term-to-RevTerm t inty outty = typeError (strErr "Only pattern-lambda terms can be reversed." ∷ [])
+Term-to-RevTerm t = typeError (strErr "Only pattern-lambda terms can be reversed." ∷ [])
 
-RevTerm-to-Term (MkRT bs inty outty) = 
+RevTerm-to-Term (MkRT bs) = 
   bindTC (mapTC process-branch bs) \ cs ->
   returnTC (ok-pat-lam cs)
   where
@@ -207,6 +205,8 @@ RevTerm-to-Term (MkRT bs inty outty) =
       bindTC (Term'-to-Term ctx ty) \ ty ->
       let ctx = ctx -, (nm , ty) in
       bindTC (helper ctx ps) \ (ctx , tel) ->
+       -- TODO: possibly don't preserve telescope type information,
+       -- since it can be re-infered by Agda.
       returnTC (ctx , (nm , varg ty) ∷ tel)
 
   RevPat-to-Pattern : Context -> RevPat -> TC Pattern
@@ -241,16 +241,16 @@ RevTerm-to-Term (MkRT bs inty outty) =
 
   process-term : Context -> List RevEqn -> RevPat -> TC Term
   process-term ctx [] outp = RevPat-to-Term ctx outp
-  process-term ctx (MkRevEqn argp (MkRevFn fn argty resty) resp ∷ eqns) outp = 
+  process-term ctx (MkRevEqn argp (MkRevFn fn) resp ∷ eqns) outp = 
     bindTC (RevPat-to-Term ctx argp) \ argp ->
     bindTC (Term'-to-Term ctx fn) \ fn ->
-    bindTC (Term'-to-Term ctx argty) \ argty ->
-    bindTC (Term'-to-Term ctx resty) \ resty ->
-    bindTC (Term'-to-Term ctx outty) \ outty ->
     bindTC (process-tel ctx resp) \ (ctx , res-tel) ->
     bindTC (RevPat-to-Pattern ctx resp) \ respat ->
     bindTC (process-term ctx eqns outp) \ rest-term ->
-    returnTC ( ok-cons argty resty outty argp fn res-tel respat rest-term )
+    returnTC (def (quote _$|_|$_) (
+          varg argp ∷
+          varg fn ∷
+          varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ []))
 
   process-branch : RevBranch -> TC Clause
   process-branch (branch inp eqns outp) =
@@ -259,9 +259,8 @@ RevTerm-to-Term (MkRT bs inty outty) =
     bindTC (process-term ctx eqns outp) \ term ->
     returnTC (ok-clause tel inp term)
 
-
 -------------------------------------------------------------------------------------
-
+{-
 test-id : {A : Set} -> A <-> A
 test-id = MkRev (\ { x -> x })
 
@@ -270,7 +269,7 @@ test-pair-swp = MkRev \ { (a , b) -> b , a }
 
 test-sum-swp : {A B : Set} -> A + B <-> B + A
 test-sum-swp = MkRev \ { (inl a) → inr a
-                         ; (inr b) → inl b }
+                       ; (inr b) → inl b }
 
 test-composed : Nat * Nat + Nat <-> Nat + Nat * Nat
 test-composed = MkRev (
@@ -279,3 +278,14 @@ test-composed = MkRev (
         n $| test-id |$ \ { n' ->
       inr (n' , m') }}
     ; (inr x) -> inl x })
+-}
+{-
+data Fin : Nat -> Set where
+  z : {n : Nat} -> Fin (suc n)
+  s : {n : Nat} -> Fin n -> Fin (suc n)
+
+test-hidden-arg-in-pattern : (m : Nat) -> Fin m <-> Fin m
+test-hidden-arg-in-pattern m = MkRev (\
+  { z     → z
+  ; (s n) → s n })
+-}
