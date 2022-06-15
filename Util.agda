@@ -7,18 +7,19 @@ open import Agda.Builtin.Reflection
 
 
 pattern default-modality = modality relevant quantity-ω
+pattern zero-modality = modality relevant quantity-0
 
  -- In various places varg is the only type of arg we support
 pattern varg x = arg (arg-info visible   default-modality) x
-pattern harg x = arg (arg-info hidden    default-modality) x
-pattern iarg x = arg (arg-info instance′ default-modality) x
+pattern harg x = arg (arg-info hidden    _               ) x
+pattern iarg x = arg (arg-info instance′ _               ) x
 
 str-eq : String -> String -> Bool
 str-eq = primStringEquality
 
 data _+_ (A B : Set) : Set where
- inl : A -> (A + B)
- inr : B -> (A + B)
+  inl : A -> (A + B)
+  inr : B -> (A + B)
 
 _*_ : Set -> Set -> Set
 A * B = Σ A \ _ -> B

@@ -77,17 +77,17 @@ QContext : Set
 QContext = SnocList (Quant * String * Type' + One)
 
 QC-index : QContext -> Nat -> TC (String * Type' + One)
-QC-index []                           i     = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
+QC-index []                             i       = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
 QC-index (ctx -, inl (zero , (nm , _))) zero    = typeError (strErr "Reference to used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
 QC-index (ctx -, inl (one ,  nmty))     zero    = returnTC (inl nmty)
 QC-index (ctx -, inr <>)                zero    = returnTC (inr <>)
-QC-index (ctx -, _)                  (suc i) = QC-index ctx i
+QC-index (ctx -, _)                     (suc i) = QC-index ctx i
 
 QC-use : QContext -> Nat -> TC (QContext * String * Type')
-QC-use [] i = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
+QC-use []                           i    = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
 QC-use (ctx -, inl (zero , nm , _)) zero = typeError (strErr "Attempt to re-use used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
-QC-use (ctx -, inl (one , nmty)) zero = returnTC ((ctx -, inl (zero , nmty)) , nmty)
-QC-use (ctx -, inr <>) zero = typeError (strErr "Attempt to use hidden variable." ∷ [])
+QC-use (ctx -, inl (one  , nmty))   zero = returnTC ((ctx -, inl (zero , nmty)) , nmty)
+QC-use (ctx -, inr <>)              zero = typeError (strErr "Attempt to use hidden variable." ∷ [])
 QC-use (ctx -, x) (suc i) =
   bindTC (QC-use ctx i) \ (ctx , nmty) ->
   returnTC ((ctx -, x) , nmty)

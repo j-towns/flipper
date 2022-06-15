@@ -1,5 +1,3 @@
-{-# OPTIONS --no-forcing #-}
-
 open import Agda.Builtin.Reflection
 open import Agda.Builtin.Sigma
 open import Agda.Builtin.Unit
@@ -17,7 +15,6 @@ open import Util
 data RevPat : Set where
   con : (c : Name)(ps : List RevPat) -> RevPat
   var : (nm : String)(ty : Type') -> RevPat
-   -- TODO: Add absurd
 
 record RevFn : Set where
   pattern
@@ -59,12 +56,12 @@ record _<->_ (A B : Set) : Set where
     apply   : A -> B
     @(tactic (reverse-tactic apply)) {unapply} : B -> A
     {-
-    TODO: require the proofs
+     -- TODO: require/generate the proofs
     unapplyApply : (a : A) -> unapply (apply a) == a
     applyUnapply : (b : B) -> apply (unapply b) == b
     -}
 
-open _<->_
+open _<->_ public
 infix 1 _<->_
 
 un : {A B : Set} -> (A <-> B) -> B <-> A
@@ -72,7 +69,6 @@ un (MkRev apply {unapply}) = MkRev unapply {apply}
 
 _$|_|$_ : {A B C : Set} -> A -> (A <-> B) -> (B -> C) -> C
 a $| f |$ g = g (apply f a)
-
 
 reverse (MkRT branches) = MkRT (list-map reverse-br branches)
   where
@@ -89,16 +85,8 @@ reverse-tactic apply hole =
   bindTC (Term-to-RevTerm term) \ rt ->
   let rt = reverse rt in
   bindTC (RevTerm-to-Term rt) \ term ->
-
-  {-
-  withNormalisation true (
-    bindTC (quoteTC term) \ `t ->
-    typeError (termErr `t ∷ [])
-  )
-  -}
-  
   unify hole term
-  
+ 
 
  -- We use pattern matching on these 'ok' forms to lossily
  -- transform from Term to RevTerm. Any pattern that isn't ok
@@ -116,7 +104,7 @@ pattern ok-cons argpat rev-fn res-tel respat rest-term =
           varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
 
 Term-to-RevTerm (ok-pat-lam cs) = 
-  bindTC (mapTC process-branch cs) \ bs ->
+  bindTC (process-branches cs) \ bs ->
   returnTC (MkRT bs)
   where
   process-tel : QContext -> List (String * Arg Type) -> TC QContext
@@ -124,8 +112,8 @@ Term-to-RevTerm (ok-pat-lam cs) =
   process-tel ctx ((nm , varg ty) ∷ tel) = 
     bindTC (Term-to-Term' ctx ty) \ ty ->
     process-tel (ctx -, inl (one , nm , ty)) tel
-  process-tel ctx ((_ , harg _) ∷ tel) = process-tel ctx tel
-  process-tel ctx ((_ , iarg _) ∷ tel) = process-tel ctx tel
+  process-tel ctx ((_ , harg _) ∷ tel) = process-tel (ctx -, inr <>) tel
+  process-tel ctx ((_ , iarg _) ∷ tel) = process-tel (ctx -, inr <>) tel
   process-tel ctx ((nm , _) ∷ _) = typeError (strErr "Invalid element in telescope." ∷ [])
 
   Pattern-to-RevPat : QContext -> Pattern -> TC RevPat
@@ -179,13 +167,17 @@ Term-to-RevTerm (ok-pat-lam cs) =
      -- TODO: Check that all variables in ctx have  been used
     returnTC ([] , outp)
   
-  process-branch : Clause -> TC RevBranch
-  process-branch (ok-clause tel inp term) = 
+  process-branches : List Clause -> TC (List RevBranch)
+  process-branches [] = returnTC []
+  process-branches (ok-clause tel inp term ∷ cs) = 
     bindTC (process-tel [] tel) \ ctx ->
     bindTC (Pattern-to-RevPat ctx inp) \ inp ->
     bindTC (process-term ctx term) \ (eqns , outp) ->
-    returnTC (branch inp eqns outp)
-  process-branch c = typeError (strErr "Clauses must have exactly one bound pattern." ∷ [])
+    bindTC (process-branches cs) \ bs ->
+    returnTC (branch inp eqns outp ∷ bs)
+   -- Absurd clauses are simply deleted
+  process-branches (absurd-clause tel inps ∷ cs) = process-branches cs
+  process-branches cs = typeError (strErr "Clauses must have exactly one bound pattern." ∷ [])
 Term-to-RevTerm t = typeError (strErr "Only pattern-lambda terms can be reversed." ∷ [])
 
 RevTerm-to-Term (MkRT bs) = 
@@ -260,32 +252,71 @@ RevTerm-to-Term (MkRT bs) =
     returnTC (ok-clause tel inp term)
 
 -------------------------------------------------------------------------------------
-{-
-test-id : {A : Set} -> A <-> A
-test-id = MkRev (\ { x -> x })
+-------------------------------------- TESTS ----------------------------------------
+-------------------------------------------------------------------------------------
 
-test-pair-swp : {A B : Set} -> A * B <-> B * A
-test-pair-swp = MkRev \ { (a , b) -> b , a }
+id : {A : Set} -> A <-> A
+id = MkRev (\ { x -> x })
 
-test-sum-swp : {A B : Set} -> A + B <-> B + A
-test-sum-swp = MkRev \ { (inl a) → inr a
-                       ; (inr b) → inl b }
+pair-swp : {A B : Set} -> A * B <-> B * A
+pair-swp = MkRev (\ { (a , b) -> b , a })
+
+sum-swp : {A B : Set} -> A + B <-> B + A
+sum-swp = MkRev \ { (inl a) → inr a
+                  ; (inr b) → inl b }
 
 test-composed : Nat * Nat + Nat <-> Nat + Nat * Nat
 test-composed = MkRev (
   \ { (inl (m , n)) -> 
-        m $| test-id |$ \ { m' ->
-        n $| test-id |$ \ { n' ->
+        m $| id |$ \ { m' ->
+        n $| id |$ \ { n' ->
       inr (n' , m') }}
     ; (inr x) -> inl x })
--}
-{-
+
+ -- Three different ways to compose two reversibles:
+_+R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A + B <-> C + D
+f +R g = MkRev \ { (inl a) → a $| f |$ \ { c -> inl c }
+                 ; (inr b) → b $| g |$ \ { d -> inr d } }
+
+_*R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A * B <-> C * D
+f *R g = MkRev (\ { (a , b) → a $| f |$ \ { c -> 
+                              b $| g |$ \ { d -> (c , d) } } })
+
+_>>>R_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
+f >>>R g = MkRev (
+  \ { a ->
+    a $| f |$ \ { b ->
+    b $| g |$ \ { c
+  -> c }}})
+
+ -- Another combinator:
+uncurryR : {A B C : Set} -> (A -> B <-> C) -> A * B <-> A * C
+uncurryR f = MkRev (\ {
+  (a , b) -> 
+    b $| f a |$ \ { c ->
+  (a , c) } })
+
 data Fin : Nat -> Set where
   z : {n : Nat} -> Fin (suc n)
   s : {n : Nat} -> Fin n -> Fin (suc n)
 
 test-hidden-arg-in-pattern : (m : Nat) -> Fin m <-> Fin m
 test-hidden-arg-in-pattern m = MkRev (\
-  { z     → z
-  ; (s n) → s n })
+  { z     -> z
+  ; (s n) -> s n })
+
+{-
+Nat-split : Nat <-> Nat + Nat
+Nat-split = MkRev (\ { n -> {!n $| !} }) {{!!}}
+  where
+  part1 : Nat <-> One + One + Nat + Nat
+  part1 = MkRev (\ { zero          → inl <>
+                   ; (suc zero)    → inr (inl <>)
+                   ; (suc (suc n)) → n $| Nat-split |$ \ { n -> inr (inr n) } })
+
+  part2 : One + One + Nat + Nat <-> Nat + Nat
+  part2 = MkRev (\ { (inl <>)            -> inl zero
+                   ; (inr (inl <>))      -> inr zero
+                   ; (inr (inr (inl n))) -> inl (suc n)
+                   ; (inr (inr (inr n))) -> inr (suc n) })
 -}
