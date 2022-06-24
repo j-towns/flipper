@@ -1,4 +1,5 @@
 open import Agda.Builtin.Reflection
+open import Agda.Builtin.Equality
 open import Agda.Builtin.Sigma
 open import Agda.Builtin.Unit
 open import Agda.Builtin.List
@@ -55,14 +56,34 @@ record _<->_ (A B : Set) : Set where
   field
     apply   : A -> B
     @(tactic (reverse-tactic apply)) {unapply} : B -> A
+     -- TODO: require/generate the proofs
+     -- unapplyApply : (a : A) -> unapply (apply a) ≡ a
+     -- applyUnapply : (b : B) -> apply (unapply b) ≡ b
+
+open _<->_ public
+infix 1 _<->_
+
+
+reverse-tactic-debug : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
+
+record _<->-debug_ (A B : Set) : Set where
+  pattern
+  constructor MkRev-debug
+  field
+    apply   : A -> B
+    @(tactic (reverse-tactic-debug apply)) {unapply} : B -> A
     {-
      -- TODO: require/generate the proofs
     unapplyApply : (a : A) -> unapply (apply a) == a
     applyUnapply : (b : B) -> apply (unapply b) == b
     -}
 
-open _<->_ public
-infix 1 _<->_
+open _<->-debug_ public
+infix 1 _<->-debug_
+
+
+
+
 
 un : {A B : Set} -> (A <-> B) -> B <-> A
 un (MkRev apply {unapply}) = MkRev unapply {apply}
@@ -86,6 +107,18 @@ reverse-tactic apply hole =
   let rt = reverse rt in
   bindTC (RevTerm-to-Term rt) \ term ->
   unify hole term
+ 
+
+reverse-tactic-debug apply hole = 
+  bindTC (quoteTC apply) \ term ->
+  bindTC (quoteTC term) \ `term ->
+  typeError (termErr `term ∷ [])
+  {-
+  bindTC (Term-to-RevTerm term) \ rt ->
+  let rt = reverse rt in
+  bindTC (RevTerm-to-Term rt) \ term ->
+  unify hole term
+  -}
  
 
  -- We use pattern matching on these 'ok' forms to lossily
@@ -152,6 +185,7 @@ Term-to-RevTerm (ok-pat-lam cs) =
       bindTC   (args-helper ctx args) \ (ctx , args) ->
       returnTC (ctx , (a ∷ args)) 
     args-helper _ _ = typeError (strErr "Unsupported arg info in subterm." ∷ [])
+  Term-to-RevPat ctx (meta m args) = blockOnMeta m
   Term-to-RevPat ctx t = typeError (strErr "Argument/output must be a variable or constructor" ∷ [])
   
   process-term : QContext -> Term -> TC (List RevEqn * RevPat)
@@ -178,6 +212,7 @@ Term-to-RevTerm (ok-pat-lam cs) =
    -- Absurd clauses are simply deleted
   process-branches (absurd-clause tel inps ∷ cs) = process-branches cs
   process-branches cs = typeError (strErr "Clauses must have exactly one bound pattern." ∷ [])
+Term-to-RevTerm (meta m args) = blockOnMeta m
 Term-to-RevTerm t = typeError (strErr "Only pattern-lambda terms can be reversed." ∷ [])
 
 RevTerm-to-Term (MkRT bs) = 
@@ -254,29 +289,30 @@ RevTerm-to-Term (MkRT bs) =
 -------------------------------------------------------------------------------------
 -------------------------------------- TESTS ----------------------------------------
 -------------------------------------------------------------------------------------
-
-id : {A : Set} -> A <-> A
-id = MkRev (\ { x -> x })
+{-
+idR : {A : Set} -> A <-> A
+idR = MkRev (\ { x -> x }) ? ?
 
 pair-swp : {A B : Set} -> A * B <-> B * A
-pair-swp = MkRev (\ { (a , b) -> b , a })
+pair-swp = MkRev (\ { (a , b) -> b , a }) ? ?
 
 sum-swp : {A B : Set} -> A + B <-> B + A
-sum-swp = MkRev \ { (inl a) → inr a
-                  ; (inr b) → inl b }
+sum-swp = MkRev (\ { (inl a) → inr a
+                   ; (inr b) → inl b }) ? ?
 
 test-composed : Nat * Nat + Nat <-> Nat + Nat * Nat
 test-composed = MkRev (
   \ { (inl (m , n)) -> 
-        m $| id |$ \ { m' ->
-        n $| id |$ \ { n' ->
+        m $| idR |$ \ { m' ->
+        n $| idR |$ \ { n' ->
       inr (n' , m') }}
-    ; (inr x) -> inl x })
+    ; (inr x) -> inl x }) ? ?
+-}
 
  -- Three different ways to compose two reversibles:
 _+R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A + B <-> C + D
-f +R g = MkRev \ { (inl a) → a $| f |$ \ { c -> inl c }
-                 ; (inr b) → b $| g |$ \ { d -> inr d } }
+f +R g = MkRev (\ { (inl a) → a $| f |$ \ { c -> inl c }
+                  ; (inr b) → b $| g |$ \ { d -> inr d } })
 
 _*R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A * B <-> C * D
 f *R g = MkRev (\ { (a , b) → a $| f |$ \ { c -> 
@@ -289,6 +325,8 @@ f >>>R g = MkRev (
     b $| g |$ \ { c
   -> c }}})
 
+infixr 2 _>>>R_
+
  -- Another combinator:
 uncurryR : {A B C : Set} -> (A -> B <-> C) -> A * B <-> A * C
 uncurryR f = MkRev (\ {
@@ -296,6 +334,7 @@ uncurryR f = MkRev (\ {
     b $| f a |$ \ { c ->
   (a , c) } })
 
+{-
 data Fin : Nat -> Set where
   z : {n : Nat} -> Fin (suc n)
   s : {n : Nat} -> Fin n -> Fin (suc n)
@@ -305,6 +344,9 @@ test-hidden-arg-in-pattern m = MkRev (\
   { z     -> z
   ; (s n) -> s n })
 
+R≡ : {A B : Set} -> A ≡ B -> A <-> B
+R≡ refl = idR
+-}
 {-
 Nat-split : Nat <-> Nat + Nat
 Nat-split = MkRev (\ { n -> {!n $| !} }) {{!!}}

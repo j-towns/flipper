@@ -146,9 +146,14 @@ Term-to-Term' ctx = helper zero
   helper depth (agda-sort (inf n))     = returnTC (agda-sort (inf n))
   helper depth (agda-sort unknown)     = returnTC (agda-sort unknown)
   helper depth (lit l) = returnTC (lit l)
+   -- Sometimes the arguments to metavariables contain used
+   -- variables which are not actually needed. Where this happens
+   -- we attempt to solve the metavariable and retry.
   helper depth (meta x args) = 
-    bindTC (args-helper depth args) \ args ->
-    returnTC (meta x args)
+    catchTC
+      (bindTC (args-helper depth args) \ args ->
+      returnTC (meta x args))
+      (blockOnMeta x)
   helper depth unknown = returnTC (unknown)
   
   args-helper depth [] = returnTC []
