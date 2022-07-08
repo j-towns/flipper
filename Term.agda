@@ -1,3 +1,5 @@
+open import Prelude hiding (abs)
+
 open import Agda.Builtin.List
 open import Agda.Builtin.Nat using (Nat; zero; suc) renaming (_+_ to _+N_; _*_ to _*N_; _-_ to _-N_; _<_ to _<N_)
 open import Agda.Builtin.Sigma
@@ -51,7 +53,7 @@ data Pattern' where
   var    : (x : Var)      → Pattern'
   lit    : (l : Literal)  → Pattern'
   proj   : (f : Name)     → Pattern'
-  absurd : (x : Var)      → Pattern'  -- absurd patterns counts as variables
+  absurd : (x : Var)      → Pattern'  -- absurd patterns count as variables
 
 data Clause' where
   clause        : (tel : List (Σ String λ _ → Arg (Type'))) (ps : List (Arg (Pattern')))
@@ -59,14 +61,14 @@ data Clause' where
   absurd-clause : (tel : List (Σ String λ _ → Arg (Type'))) (ps : List (Arg (Pattern'))) → Clause'
 
 data Quant : Set where
-  zero one : Quant
+  qzero qone : Quant
 
 Context : Set
-Context = SnocList (String * Type)
+Context = SnocList String
 
 C-lookup : Context -> String -> TC Nat
 C-lookup [] v = typeError (strErr "Couldn't find name " ∷ strErr v ∷ strErr " in context." ∷ []) 
-C-lookup (ctx -, (nm , ty)) v with str-eq nm v
+C-lookup (ctx -, nm) v with str-eq nm v
 ... | false = 
   bindTC (C-lookup ctx v) \ i ->
   returnTC (suc i)
@@ -74,20 +76,20 @@ C-lookup (ctx -, (nm , ty)) v with str-eq nm v
 
  -- The right branch denotes hidden variables, uses of which should be replaced by `unknown`
 QContext : Set
-QContext = SnocList (Quant * String * Type' + One)
+QContext = SnocList (Quant × String ⊎ One)
 
-QC-index : QContext -> Nat -> TC (String * Type' + One)
-QC-index []                             i       = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
-QC-index (ctx -, inl (zero , (nm , _))) zero    = typeError (strErr "Reference to used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
-QC-index (ctx -, inl (one ,  nmty))     zero    = returnTC (inl nmty)
-QC-index (ctx -, inr <>)                zero    = returnTC (inr <>)
-QC-index (ctx -, _)                     (suc i) = QC-index ctx i
+QC-index : QContext -> Nat -> TC (String ⊎ One)
+QC-index []                         i       = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
+QC-index (ctx -, left (qzero , nm)) zero    = typeError (strErr "Reference to used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
+QC-index (ctx -, left (qone ,  nm)) zero    = returnTC (left nm)
+QC-index (ctx -, right <>)          zero    = returnTC (right <>)
+QC-index (ctx -, _)                 (suc i) = QC-index ctx i
 
-QC-use : QContext -> Nat -> TC (QContext * String * Type')
-QC-use []                           i    = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
-QC-use (ctx -, inl (zero , nm , _)) zero = typeError (strErr "Attempt to re-use used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
-QC-use (ctx -, inl (one  , nmty))   zero = returnTC ((ctx -, inl (zero , nmty)) , nmty)
-QC-use (ctx -, inr <>)              zero = typeError (strErr "Attempt to use hidden variable." ∷ [])
+QC-use : QContext -> Nat -> TC (QContext × String)
+QC-use []                         i    = typeError (strErr "Invalid variable lookup." ∷ []) -- this should be unreachable
+QC-use (ctx -, left (qzero , nm)) zero = typeError (strErr "Attempt to re-use used variable " ∷ strErr nm ∷ strErr ". " ∷ [])
+QC-use (ctx -, left (qone  , nm)) zero = returnTC ((ctx -, left (qzero , nm)) , nm)
+QC-use (ctx -, right <>)          zero = typeError (strErr "Attempt to use hidden variable." ∷ [])
 QC-use (ctx -, x) (suc i) =
   bindTC (QC-use ctx i) \ (ctx , nmty) ->
   returnTC ((ctx -, x) , nmty)
@@ -95,29 +97,29 @@ QC-use (ctx -, x) (suc i) =
 Term-to-Term' : QContext -> Term -> TC Term'
 Term-to-Term' ctx = helper zero
   where
-  convert-var : (depth : Nat) -> (x : Nat) -> TC (Var + One)
+  convert-var : (depth : Nat) -> (x : Nat) -> TC (Var ⊎ One)
   convert-var depth x with x <N depth
   convert-var depth x | false with x <N depth +N (slist-length ctx)
   convert-var depth x | false | false = 
-    returnTC (inl (outer-db (x -N (depth +N (slist-length ctx)))))
+    returnTC (left (outer-db (x -N (depth +N (slist-length ctx)))))
   convert-var depth x | false | true = 
     bindTC (QC-index ctx (x -N depth)) \
-      { (inl (nm , _)) -> returnTC (inl (rev nm))
-      ; (inr <>)       -> returnTC (inr <>) }
-  convert-var depth x | true = returnTC (inl (inner-db x))
+      { (left nm) -> returnTC (left (rev nm))
+      ; (right <>)       -> returnTC (right <>) }
+  convert-var depth x | true = returnTC (left (inner-db x))
 
   args-helper : Nat -> List (Arg Term) -> TC (List (Arg Term'))
   clauses-helper : Nat -> List Clause -> TC (List Clause')
   patterns-helper : Nat -> List (Arg Pattern) -> TC (List (Arg Pattern'))
-  tel-helper : Nat -> List (String * Arg Type) -> TC (List (String * Arg Type'))
+  tel-helper : Nat -> List (String × Arg Type) -> TC (List (String × Arg Type'))
   helper : Nat -> Term -> TC Term'
   
   helper depth (var x args) =
     bindTC (convert-var depth x) \
-      { (inl x) ->
+      { (left x) ->
           bindTC (args-helper depth args) \ args ->
           returnTC (var x args)
-      ; (inr <>) -> returnTC unknown }
+      ; (right <>) -> returnTC unknown }
   helper depth (con c args) =
     bindTC (args-helper depth args) \ args ->
     returnTC (con c args)
@@ -165,14 +167,14 @@ Term-to-Term' ctx = helper zero
   clauses-helper depth [] = returnTC []
   clauses-helper depth (clause tel ps t ∷ clauses) =
     bindTC (tel-helper depth tel) \ tel ->
-    let depth = depth +N (list-length tel) in
+    let depth = depth +N (length tel) in
     bindTC (patterns-helper depth ps) \ ps ->
     bindTC (helper depth t) \ t ->
     bindTC (clauses-helper depth clauses) \ clauses ->
     returnTC (clause tel ps t ∷ clauses)
   clauses-helper depth (absurd-clause tel ps ∷ clauses) = 
     bindTC (tel-helper depth tel) \ tel ->
-    let depth = depth +N (list-length tel) in
+    let depth = depth +N (length tel) in
     bindTC (patterns-helper depth ps) \ ps ->
     bindTC (clauses-helper depth clauses) \ clauses ->
     returnTC (absurd-clause tel ps ∷ clauses)
@@ -192,17 +194,17 @@ Term-to-Term' ctx = helper zero
       returnTC (dot t)
     Pattern-to-Pattern' (var x) = 
       bindTC (convert-var depth x) \
-        { (inl x) -> returnTC (var x)
+        { (left x) -> returnTC (var x)
          -- Pretty sure this is unreachable, since pattern variables only refer to the
          -- telescope of the clause in which they are introduced.
-        ; (inr <>) -> typeError (strErr "Reference to hidden var in pattern." ∷ [])  }
+        ; (right <>) -> typeError (strErr "Reference to hidden var in pattern." ∷ [])  }
     Pattern-to-Pattern' (lit l) = returnTC (lit l)
     Pattern-to-Pattern' (proj f) = returnTC (proj f)
     Pattern-to-Pattern' (absurd x) = 
       bindTC (convert-var depth x) \
-        { (inl x)  -> returnTC (absurd x)
+        { (left x)  -> returnTC (absurd x)
          -- Pretty sure this is unreachable, same reason as above.
-        ; (inr <>) -> typeError (strErr "Reference to hidden var in pattern." ∷ [])  }
+        ; (right <>) -> typeError (strErr "Reference to hidden var in pattern." ∷ [])  }
 
   tel-helper depth [] = returnTC []
   tel-helper depth ((nm , arg i ty) ∷ tel) = 
@@ -240,19 +242,19 @@ Term'-to-Term ctx = helper zero
     returnTC (pat-lam cs args)
     where
     clauses-helper : Nat -> List Clause' -> TC (List Clause)
-    tel-helper : Nat -> List (String * Arg Type') -> TC (List (String * Arg Type))
+    tel-helper : Nat -> List (String × Arg Type') -> TC (List (String × Arg Type))
     patterns-helper : Nat -> List (Arg Pattern') -> TC (List (Arg Pattern))
     clauses-helper depth [] = returnTC []
     clauses-helper depth (clause tel ps t ∷ clauses) =
       bindTC (tel-helper depth tel) \ tel ->
-      let depth = depth +N (list-length tel) in
+      let depth = depth +N (length tel) in
       bindTC (patterns-helper depth ps) \ ps ->
       bindTC (helper depth t) \ t ->
       bindTC (clauses-helper depth clauses) \ clauses ->
       returnTC (clause tel ps t ∷ clauses)
     clauses-helper depth (absurd-clause tel ps ∷ clauses) = 
       bindTC (tel-helper depth tel) \ tel ->
-      let depth = depth +N (list-length tel) in
+      let depth = depth +N (length tel) in
       bindTC (patterns-helper depth ps) \ ps ->
       bindTC (clauses-helper depth clauses) \ clauses ->
       returnTC (absurd-clause tel ps ∷ clauses)
@@ -310,5 +312,3 @@ Term'-to-Term ctx = helper zero
     bindTC (helper depth t) \ t ->
     bindTC (args-helper depth args) \ args ->
     returnTC (arg i t ∷ args)
-
-
