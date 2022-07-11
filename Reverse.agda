@@ -238,12 +238,14 @@ private
   mk-proof _ _ = typeError (strErr "Only pattern-lambda terms can be reversed." ∷ [])
   
   R-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
-  R-tactic apply hole =
-    bindTC (quoteTC apply) \ `apply ->
-    bindTC (Term-to-RevTerm `apply) \ apply-rt ->
-    bindTC (RevTerm-to-Term (reverse apply-rt)) \ `unapply ->
+  R-tactic apply hole = do
+    `apply <- quoteTC apply
+    apply-rt <- Term-to-RevTerm `apply
+    `unapply <- RevTerm-to-Term (reverse apply-rt)
+
      -- bindTC (mk-proof `apply `unapply) \ `unapplyApply ->
      -- bindTC (mk-proof `unapply `apply) \ `applyUnapply ->
+
     unify (con (quote MkRev) (varg `apply ∷ varg `unapply ∷ [])) hole
 
 R : {A B : Set} (apply : A -> B) {@(tactic R-tactic apply) rev : A <-> B} -> A <-> B
@@ -254,7 +256,7 @@ R apply {r} = r
 -------------------------------------------------------------------------------------
 
 pair-swp : {A B : Set} -> A × B <-> B × A
-pair-swp = R (\ { (a , b) -> b , a })
+pair-swp = R (\{ (a , b) -> b , a})
 
 idR : {A : Set} -> A <-> A
 idR = R (\ { x -> x })
