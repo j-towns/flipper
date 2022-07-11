@@ -151,8 +151,7 @@ Term-to-Term' ctx = helper zero
    -- we attempt to solve the metavariable and retry.
   helper depth (meta x args) = 
     catchTC
-      (bindTC (args-helper depth args) \ args ->
-      return (meta x args))
+      (bindTC (args-helper depth args) \ args -> return (meta x args))
       (blockOnMeta x)
   helper depth unknown = return (unknown)
   

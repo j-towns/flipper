@@ -1,5 +1,6 @@
-open import Prelude renaming (reverse to list-reverse')
+open import Prelude renaming (reverse to list-reverse') hiding (abs)
 open import Container.Traversable
+open import Tactic.Reflection.DeBruijn
 
 open import Agda.Builtin.Sigma
 open import Agda.Builtin.Unit
@@ -21,14 +22,14 @@ record _<->_ (A B : Set) : Set where
   field
     apply   : A -> B
     unapply : B -> A
-     -- unapplyApply : (a : A) -> unapply (apply a) ≡ a
-     -- applyUnapply : (b : B) -> apply (unapply b) ≡ b
+    unapplyApply : (a : A) -> unapply (apply a) ≡ a
+    applyUnapply : (b : B) -> apply (unapply b) ≡ b
 
 open _<->_ public
 infix 1 _<->_
 
 un : {A B : Set} -> (A <-> B) -> B <-> A
-un (MkRev apply unapply) = MkRev unapply apply
+un (MkRev apply unapply ua au) = MkRev unapply apply au ua
 
 _$|_|$_ : {A B C : Set} -> A -> (A <-> B) -> (B -> C) -> C
 a $| f |$ g = g (apply f a)
@@ -39,7 +40,7 @@ private
   data RevPat : Set where
     con : (c : Name)(ps : List RevPat) -> RevPat
     var : (nm : String) -> RevPat
-  
+
   record RevEqn : Set where
     pattern
     constructor MkRevEqn
@@ -47,7 +48,7 @@ private
       argp : RevPat
       fn : Term'
       resp : RevPat
-  
+
   record RevBranch : Set where
     pattern
     constructor branch
@@ -55,13 +56,13 @@ private
       inp  : RevPat
       eqns : List RevEqn
       outp : RevPat
-  
+
   record RevTerm : Set where
     pattern
     constructor MkRT
     field
       branches : List RevBranch
-  
+
    -- Reversal transformation
   reverse-eqn : RevEqn -> RevEqn
   reverse-eqn (MkRevEqn argp fn resp) =
@@ -73,7 +74,7 @@ private
 
   reverse : RevTerm -> RevTerm
   reverse (MkRT branches) = MkRT (fmap reverse-br branches)
-  
+
    -- We use pattern matching on these 'ok' forms to lossily
    -- transform from Term to RevTerm. Any pattern that isn't ok
    -- will throw an error. We use the same ok patterns
@@ -113,7 +114,7 @@ private
 
       {-# TERMINATING #-}
       Term-to-RevPat : QContext -> Term -> TC (QContext × RevPat)
-      Term-to-RevPat ctx (var x []) = do 
+      Term-to-RevPat ctx (var x []) = do
         ctx , nm <- QC-use ctx x
         return (ctx , var nm)
       Term-to-RevPat ctx (con c ps) = do
@@ -125,7 +126,7 @@ private
         args-helper ctx (a ∷ args) = do
           ctx , a    <- Term-to-RevPat ctx a
           ctx , args <- args-helper    ctx args
-          return (ctx , (a ∷ args)) 
+          return (ctx , (a ∷ args))
       Term-to-RevPat ctx (meta m args) = blockOnMeta m
       Term-to-RevPat ctx t =
         typeError (strErr "Argument/output must be a variable or constructor" ∷ [])
@@ -162,7 +163,7 @@ private
     Term-to-RevTerm t = typeError (strErr "Only pattern-lambda terms can be reversed." ∷ [])
 
   open T-to-RT
-  
+
   module RT-to-T where
     private
       process-tel : Context -> RevPat -> Context × List (String × Arg Type)
@@ -180,7 +181,7 @@ private
 
       {-# TERMINATING #-}
       RevPat-to-Pattern : Context -> RevPat -> TC (Arg Pattern)
-      RevPat-to-Pattern ctx (con c ps) = 
+      RevPat-to-Pattern ctx (con c ps) =
         return ∘ varg ∘ con c =<< traverse (RevPat-to-Pattern ctx) ps
       RevPat-to-Pattern ctx (var nm) =
         return ∘ varg ∘ var =<< C-lookup ctx nm
@@ -189,9 +190,9 @@ private
       RevPat-to-Term : Context -> RevPat -> TC Term
       RevPat-to-Term ctx (con c ps) =
         return ∘ con c ∘ map varg =<< traverse (RevPat-to-Term ctx) ps
-      RevPat-to-Term ctx (var nm) = 
+      RevPat-to-Term ctx (var nm) =
         return ∘ (\ x -> var x []) =<< C-lookup ctx nm
-    
+
     RevTerm-to-Term : RevTerm -> TC Term
     RevTerm-to-Term (MkRT bs) =
       return ∘ ok-pat-lam =<< traverse process-branch bs
@@ -205,7 +206,53 @@ private
         respat <- RevPat-to-Pattern ctx resp
         rest-term <- process-term ctx eqns outp
         return (reduced-cons argp fn res-tel respat rest-term)
-    
+
+      process-branch : RevBranch -> TC Clause
+      process-branch (branch inp eqns outp) = do
+        let ctx , tel = process-tel [] inp
+        inp <- RevPat-to-Pattern ctx inp
+        term <- process-term ctx eqns outp
+        return (ok-clause tel inp term)
+
+     -- Proof building
+    base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
+    base _ _ unapply b = refl
+
+    _P|_|P_ : {A B C : Set} -> {rest : C -> A} {unapply-end : B -> A} -> (b : B)
+      -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
+      -> rest (apply f b) ≡ unapply-end b
+    b P| f |P cont with apply f b | unapplyApply f b
+    ... | c | refl = cont c
+
+    private
+      pattern proof-base `A `B `unapply outp =
+        def (quote base) (vArg `A ∷ vArg `B ∷ varg `unapply ∷ varg outp ∷ [])
+      pattern proof-cons argpat rev-fn res-tel respat rest-term =
+        def (quote _P|_|P_) (
+          varg argpat ∷
+          varg rev-fn ∷
+          varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
+
+     -- To construct a proof from a reversible apply function, we
+     -- replace _$|_|$_ with _P|_|P_, and the reversible pattern at
+     -- the end of apply with base.
+    RT-to-proof : (apply : RevTerm) (`A `B `unapply : Term) -> TC Term
+    RT-to-proof (MkRT bs) `A `B `unapply =
+      return ∘ ok-pat-lam =<< traverse process-branch bs
+      where
+      process-term : Context -> List RevEqn -> RevPat -> TC Term
+      process-term ctx [] outp = do
+        outp <- RevPat-to-Term ctx outp
+        let weaken = weaken (slist-length ctx)
+        return (proof-base (weaken `A) (weaken `B) (weaken `unapply) outp)
+      process-term ctx (MkRevEqn argp fn resp ∷ eqns) outp = do
+        argp <- RevPat-to-Term ctx argp
+        fn <- Term'-to-Term ctx fn
+        let ctx , res-tel = process-tel ctx resp
+        respat <- RevPat-to-Pattern ctx resp
+        rest-term <- process-term ctx eqns outp
+        return (proof-cons argp fn res-tel respat rest-term)
+
       process-branch : RevBranch -> TC Clause
       process-branch (branch inp eqns outp) = do
         let ctx , tel = process-tel [] inp
@@ -213,40 +260,20 @@ private
         term <- process-term ctx eqns outp
         return (ok-clause tel inp term)
   open RT-to-T
-  
-   -- Proof building
-  base : {A B : Set} -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
-  base unapply b = refl
-  
-  {-
-  _P|_|P_ : {A B C : Set} -> {rest : C -> A} {unapply-end : B -> A} -> (b : B)
-    -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
-    -> rest (apply f b) ≡ unapply-end b
-  b P| f |P cont with apply f b | unapplyApply f b
-  ... | c | refl = cont c
-  -}
-  
-   -- To construct a proof from a reversible apply function, we replace _$|_|$_ with
-   -- _P|_|P_, and the reversible pattern at the end of apply with base.
-  mk-proof : (`apply `unapply : Term) -> TC Term
-  mk-proof (ok-pat-lam cs) `unapply = process-branches cs
-    where
-    process-branches : List Clause -> TC Term
-    process-branches [] = returnTC (ok-pat-lam [])
-    process-branches (ok-clause tel inp term ∷ cs) = {!!}
-    process-branches _ = {!!}
-  mk-proof _ _ = typeError (strErr "Only pattern-lambda terms can be reversed." ∷ [])
-  
+
+
   R-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
-  R-tactic apply hole = do
+  R-tactic {A} {B} apply hole = do
+    `A <- quoteTC A
+    `B <- quoteTC B
     `apply <- quoteTC apply
     apply-rt <- Term-to-RevTerm `apply
-    `unapply <- RevTerm-to-Term (reverse apply-rt)
-
-     -- bindTC (mk-proof `apply `unapply) \ `unapplyApply ->
-     -- bindTC (mk-proof `unapply `apply) \ `applyUnapply ->
-
-    unify (con (quote MkRev) (varg `apply ∷ varg `unapply ∷ [])) hole
+    let unapply-rt = reverse apply-rt
+    `apply   <- RevTerm-to-Term apply-rt
+    `unapply <- RevTerm-to-Term unapply-rt
+    `ua <- RT-to-proof apply-rt   `A `B `unapply
+    `au <- RT-to-proof unapply-rt `B `A `apply
+    unify (con (quote MkRev) (map varg (`apply ∷ `unapply ∷ `ua ∷ `au ∷ []))) hole
 
 R : {A B : Set} (apply : A -> B) {@(tactic R-tactic apply) rev : A <-> B} -> A <-> B
 R apply {r} = r
@@ -254,32 +281,16 @@ R apply {r} = r
 -------------------------------------------------------------------------------------
 -------------------------------------- TESTS ----------------------------------------
 -------------------------------------------------------------------------------------
-
-pair-swp : {A B : Set} -> A × B <-> B × A
-pair-swp = R (\{ (a , b) -> b , a})
-
+ -- Three different ways to compose two reversibles:
 idR : {A : Set} -> A <-> A
 idR = R (\ { x -> x })
 
-test-composed : Either (Nat × Nat) Nat <-> Either Nat (Nat × Nat)
-test-composed = R (
-  \ { (left (m , n)) -> 
-        m $| idR |$ \ { m' ->
-        n $| idR |$ \ { n' ->
-      right (n' , m') }}
-    ; (right x) -> left x })
-
-sum-swp : {A B : Set} -> Either A B <-> Either B A
-sum-swp = R (\ { (left a) → right a
-               ; (right b) → left b })
-
- -- Three different ways to compose two reversibles:
 _+R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
 f +R g = R \ { (left a) → a $| f |$ \ { c -> left c }
              ; (right b) → b $| g |$ \ { d -> right d } }
 
 _*R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
-f *R g = R \ { (a , b) -> a $| f |$ \ { c -> 
+f *R g = R \ { (a , b) -> a $| f |$ \ { c ->
                           b $| g |$ \ { d -> (c , d) } } }
 
 _>>>R_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
@@ -289,39 +300,23 @@ f >>>R g = R (
 
 infixr 2 _>>>R_
 
- -- Another combinator:
-uncurryR : {A B C : Set} -> (A -> B <-> C) -> A × B <-> A × C
-uncurryR f = R (\ {
-  (a , b) -> b $| f a |$ \ { c -> (a , c) }})
+private
+  pair-swp : {A B : Set} -> A × B <-> B × A
+  pair-swp = R (\{ (a , b) -> b , a})
 
-uncurryR' : {A : Set} {B C : A -> Set} -> ((a : A) -> B a <-> C a) -> Σ A B <-> Σ A C
-uncurryR' f = R \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
+  sum-swp : {A B : Set} -> Either A B <-> Either B A
+  sum-swp = R (\ { (left a)  → right a
+                 ; (right b) → left b })
 
-{-
-data Fin : Nat -> Set where
-  z : {n : Nat} -> Fin (suc n)
-  s : {n : Nat} -> Fin n -> Fin (suc n)
+  uncurryR : {A B C : Set} -> (A -> B <-> C) -> A × B <-> A × C
+  uncurryR f = R (\ {
+    (a , b) -> b $| f a |$ \ { c -> (a , c) }})
 
-test-hidden-arg-in-pattern : (m : Nat) -> Fin m <-> Fin m
-test-hidden-arg-in-pattern m = MkRev (\
-  { z     -> z
-  ; (s n) -> s n })
+  uncurryR' : {A : Set} {B C : A -> Set} -> ((a : A) -> B a <-> C a) -> Σ A B <-> Σ A C
+  uncurryR' f = R \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
 
-R≡ : {A B : Set} -> A ≡ B -> A <-> B
-R≡ refl = idR
--}
-{-
-Nat-split : Nat <-> Nat + Nat
-Nat-split = MkRev (\ { n -> {!n $| !} }) {{!!}}
-  where
-  part1 : Nat <-> One + One + Nat + Nat
-  part1 = MkRev (\ { zero          → left <>
-                   ; (suc zero)    → right (left <>)
-                   ; (suc (suc n)) → n $| Nat-split |$ \ { n -> right (right n) } })
-
-  part2 : One + One + Nat + Nat <-> Nat + Nat
-  part2 = MkRev (\ { (left <>)            -> left zero
-                   ; (right (left <>))      -> right zero
-                   ; (right (right (left n))) -> left (suc n)
-                   ; (right (right (right n))) -> right (suc n) })
--}
+  test-composed : Either (Nat × Nat) Nat <-> Either Nat (Nat × Nat)
+  test-composed = R (
+    \ { (left (m , n)) -> m $| idR |$ \ { m' ->
+                          n $| idR |$ \ { n' -> right (n' , m') }}
+      ; (right x)      ->                       left x })
