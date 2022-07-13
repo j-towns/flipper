@@ -1,14 +1,17 @@
+module Reverse.Term where
+
 open import Prelude hiding (abs)
 
 open import Agda.Builtin.List
-open import Agda.Builtin.Nat using (Nat; zero; suc) renaming (_+_ to _+N_; _*_ to _*N_; _-_ to _-N_; _<_ to _<N_)
+open import Agda.Builtin.Nat using (Nat; zero; suc)
+  renaming (_+_ to _+N_; _*_ to _*N_; _-_ to _-N_; _<_ to _<N_)
 open import Agda.Builtin.Sigma
 open import Agda.Builtin.String
 open import Agda.Builtin.Bool
 
 open import Builtin.Reflection
 
-open import Util
+open import Reverse.Util
 
 
  -- We define a new term which uses a representation of variables that

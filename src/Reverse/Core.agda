@@ -1,3 +1,5 @@
+module Reverse.Core where
+
 open import Prelude renaming (reverse to list-reverse') hiding (abs)
 open import Container.Traversable
 open import Tactic.Reflection.DeBruijn
@@ -12,8 +14,8 @@ open import Agda.Builtin.Nat renaming (_+_ to _+N_; _*_ to _*N_)
 
 open import Builtin.Reflection
 
-open import Term
-open import Util
+open import Reverse.Term
+open import Reverse.Util
 
 
 record _<->_ (A B : Set) : Set where
@@ -34,6 +36,15 @@ un (MkRev apply unapply ua au) = MkRev unapply apply au ua
 _$|_|$_ : {A B C : Set} -> A -> (A <-> B) -> (B -> C) -> C
 a $| f |$ g = g (apply f a)
 
+ -- Proof building
+base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
+base _ _ unapply b = refl
+
+_P|_|P_ : {A B C : Set} -> {rest : C -> A} {unapply-end : B -> A} -> (b : B)
+  -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
+  -> rest (apply f b) ≡ unapply-end b
+b P| f |P cont with apply f b | unapplyApply f b
+... | c | refl = cont c
 
 private
    -- Reversible syntax
@@ -108,9 +119,12 @@ private
           where right <> -> typeErrorS "Reference to hidden variable in pattern."
         return $ var nm
       Pattern-to-RevPat ctx (varg (con c ps)) = do
-        ps <- traverse (Pattern-to-RevPat ctx) ps
+        ps <- traverse (Pattern-to-RevPat ctx) (filter isVisible ps)
         return $ con c ps
-      Pattern-to-RevPat _ _ = typeErrorS "Patterns must either be variables or constructors"
+      Pattern-to-RevPat _   (varg p) = typeError
+        (strErr "Patterns must either be variables or constructors, got "
+        ∷ pattErr p ∷ [])
+      Pattern-to-RevPat _   _        = typeErrorS "Non-visible pattern."
 
       {-# TERMINATING #-}
       Term-to-RevPat : QContext -> Term -> TC (QContext × RevPat)
@@ -214,16 +228,6 @@ private
         term <- process-term ctx eqns outp
         return (ok-clause tel inp term)
 
-     -- Proof building
-    base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
-    base _ _ unapply b = refl
-
-    _P|_|P_ : {A B C : Set} -> {rest : C -> A} {unapply-end : B -> A} -> (b : B)
-      -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
-      -> rest (apply f b) ≡ unapply-end b
-    b P| f |P cont with apply f b | unapplyApply f b
-    ... | c | refl = cont c
-
     private
       pattern proof-base `A `B `unapply outp =
         def (quote base) (vArg `A ∷ vArg `B ∷ varg `unapply ∷ varg outp ∷ [])
@@ -261,44 +265,71 @@ private
         return (ok-clause tel inp term)
   open RT-to-T
 
+R-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
+R-tactic {A} {B} apply hole = do
+  `A <- quoteTC A
+  `B <- quoteTC B
+  `apply <- quoteTC apply
+  apply-rt <- Term-to-RevTerm `apply
+  let unapply-rt = reverse apply-rt
+  `apply   <- RevTerm-to-Term apply-rt
+  `unapply <- RevTerm-to-Term unapply-rt
+  `ua <- RT-to-proof apply-rt   `A `B `unapply
+  `au <- RT-to-proof unapply-rt `B `A `apply
 
-  R-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
-  R-tactic {A} {B} apply hole = do
-    `A <- quoteTC A
-    `B <- quoteTC B
-    `apply <- quoteTC apply
-    apply-rt <- Term-to-RevTerm `apply
-    let unapply-rt = reverse apply-rt
-    `apply   <- RevTerm-to-Term apply-rt
-    `unapply <- RevTerm-to-Term unapply-rt
-    `ua <- RT-to-proof apply-rt   `A `B `unapply
-    `au <- RT-to-proof unapply-rt `B `A `apply
-    unify (con (quote MkRev) (map varg (`apply ∷ `unapply ∷ `ua ∷ `au ∷ []))) hole
+   -- withNormalisation true (bindTC (quoteTC `ua) (\ ``ua -> typeError (termErr ``ua ∷ [])))
+
+  unify (con (quote MkRev) (map varg (`apply ∷ `unapply ∷ `ua ∷ `au ∷ []))) hole
 
 R : {A B : Set} (apply : A -> B) {@(tactic R-tactic apply) rev : A <-> B} -> A <-> B
-R apply {r} = r
+R {A} {B} _ {r} = MkRev ap unap unapap apunap
+  where
+  abstract
+    ap : A -> B
+    ap = apply r
+
+    unap : B -> A
+    unap = unapply r
+
+    unapap : (a : A) -> unap (ap a) ≡ a
+    unapap = unapplyApply r
+
+    apunap : (b : B) -> ap (unap b) ≡ b
+    apunap = applyUnapply r
 
 -------------------------------------------------------------------------------------
 -------------------------------------- TESTS ----------------------------------------
 -------------------------------------------------------------------------------------
- -- Three different ways to compose two reversibles:
+_>>>R_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
+_>>>R_ {A} {B} {C} f g = MkRev (
+  \ { a -> a $| f |$ \ { b ->
+           b $| g |$ \ { c -> c }}}) (
+  \ { c -> c $| un g |$ \ { b ->
+           b $| un f |$ \ { a -> a }}}) (
+  \ { a -> _P|_|P_ {unapply-end = \ a -> a} a f \ { b ->
+           _P|_|P_ {unapply-end = _} b g \ { c -> base A C (
+    \ { c -> c $| un g |$ \ { b ->
+             b $| un f |$ \ { a -> a }}}) c }}}) 
+  \ { c -> c P| un g |P \ { b ->
+           b P| un f |P \ { a -> base C A (
+    \ { a -> a $| f |$ \ { b ->
+             b $| g |$ \ { c -> c }}}) a }}}
+infixr 2 _>>>R_
+
 idR : {A : Set} -> A <-> A
 idR = R (\ { x -> x })
 
-_+R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
-f +R g = R \ { (left a) → a $| f |$ \ { c -> left c }
-             ; (right b) → b $| g |$ \ { d -> right d } }
-
+ -- Three different ways to compose two reversibles:
 _*R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
-f *R g = R \ { (a , b) -> a $| f |$ \ { c ->
-                          b $| g |$ \ { d -> (c , d) } } }
+f *R g = R \ { (a , b) → a $| f |$ \ { c
+                       → b $| g |$ \ { d → (c , d) } } }
 
-_>>>R_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
-f >>>R g = R (
-  \ { a -> a $| f |$ \ { b ->
-           b $| g |$ \ { c -> c }}})
+_+R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
+f +R g = R (\ { (left  a) → a $| f |$ \ { c -> left  c }
+              ; (right b) → b $| g |$ \ { d -> right d } })
 
-infixr 2 _>>>R_
+R≡ : {A B : Set} -> A ≡ B -> A <-> B
+R≡ refl = R (\ { x -> x})
 
 private
   pair-swp : {A B : Set} -> A × B <-> B × A
@@ -320,3 +351,13 @@ private
     \ { (left (m , n)) -> m $| idR |$ \ { m' ->
                           n $| idR |$ \ { n' -> right (n' , m') }}
       ; (right x)      ->                       left x })
+
+  data Al : Set where
+    `a `b `c `d : Al
+    
+  test-nested-sum : Either (Either Nat Nat) (Either Nat Nat) <-> Al × Nat
+  test-nested-sum = R (\
+    { (left  (left  x)) → x $| un idR |$ \ { x -> `a , x }
+    ; (left  (right x)) → `b , x
+    ; (right (left  x)) → `c , x
+    ; (right (right x)) → `d , x })
