@@ -301,6 +301,12 @@ R {A} {B} _ {r} = MkRev ap unap unapap apunap
 -------------------------------------- TESTS ----------------------------------------
 -------------------------------------------------------------------------------------
 _>>>R_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
+_>>>R_ {A} {B} {C} f g = R (
+  \ { a -> a $| f |$ \ { b ->
+           b $| g |$ \ { c -> c }}})
+infixl 2 _>>>R_
+
+{-
 _>>>R_ {A} {B} {C} f g = MkRev (
   \ { a -> a $| f |$ \ { b ->
            b $| g |$ \ { c -> c }}}) (
@@ -315,6 +321,7 @@ _>>>R_ {A} {B} {C} f g = MkRev (
     \ { a -> a $| f |$ \ { b ->
              b $| g |$ \ { c -> c }}}) a }}}
 infixr 2 _>>>R_
+-}
 
 idR : {A : Set} -> A <-> A
 idR = R (\ { x -> x })
@@ -346,12 +353,6 @@ private
   uncurryR' : {A : Set} {B C : A -> Set} -> ((a : A) -> B a <-> C a) -> Σ A B <-> Σ A C
   uncurryR' f = R \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
 
-  test-composed : Either (Nat × Nat) Nat <-> Either Nat (Nat × Nat)
-  test-composed = R (
-    \ { (left (m , n)) -> m $| idR |$ \ { m' ->
-                          n $| idR |$ \ { n' -> right (n' , m') }}
-      ; (right x)      ->                       left x })
-
   data Al : Set where
     `a `b `c `d : Al
     
@@ -361,3 +362,9 @@ private
     ; (left  (right x)) → `b , x
     ; (right (left  x)) → `c , x
     ; (right (right x)) → `d , x })
+
+  test-composed : Either (Nat × Nat) Nat <-> Either Nat (Nat × Nat)
+  test-composed = R (
+    \ { (left (m , n)) -> m $| idR |$ \ { m' ->
+                          n $| idR |$ \ { n' -> right (n' , m') }}
+      ; (right x)      ->                       left x })
