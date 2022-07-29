@@ -1,4 +1,4 @@
-module Reverse.Util where
+module Flipper.Util where
 
 open import Prelude
 

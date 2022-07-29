@@ -1,4 +1,4 @@
-module Reverse.Term where
+module Flipper.Term where
 
 open import Prelude hiding (abs)
 

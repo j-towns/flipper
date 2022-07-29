@@ -1,4 +1,4 @@
-module Reverse.Core where
+module Flipper.Core where
 
 open import Prelude renaming (reverse to list-reverse') hiding (abs)
 open import Container.Traversable
