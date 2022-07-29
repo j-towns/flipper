@@ -36,16 +36,6 @@ un (MkRev apply unapply ua au) = MkRev unapply apply au ua
 _$|_|$_ : {A B C : Set} -> A -> (A <-> B) -> (B -> C) -> C
 a $| f |$ g = g (apply f a)
 
- -- Proof building
-base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
-base _ _ unapply b = refl
-
-_P|_|P_ : {A B C : Set} -> {rest : C -> A} {unapply-end : B -> A} -> (b : B)
-  -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
-  -> rest (apply f b) ≡ unapply-end b
-b P| f |P cont with apply f b | unapplyApply f b
-... | c | refl = cont c
-
 private
    -- Reversible syntax
   data RevPat : Set where
@@ -229,6 +219,16 @@ private
         return (ok-clause tel inp term)
 
     private
+       -- Proof building
+      base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
+      base _ _ unapply b = refl
+
+      _P|_|P_ : {A B C : Set} -> {rest : C -> A} {unapply-end : B -> A} -> (b : B)
+        -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
+        -> rest (apply f b) ≡ unapply-end b
+      b P| f |P cont with apply f b | unapplyApply f b
+      ... | c | refl = cont c
+
       pattern proof-base `A `B `unapply outp =
         def (quote base) (vArg `A ∷ vArg `B ∷ varg `unapply ∷ varg outp ∷ [])
       pattern proof-cons argpat rev-fn res-tel respat rest-term =
@@ -276,9 +276,6 @@ R-tactic {A} {B} apply hole = do
   `unapply <- RevTerm-to-Term unapply-rt
   `ua <- RT-to-proof apply-rt   `A `B `unapply
   `au <- RT-to-proof unapply-rt `B `A `apply
-
-   -- withNormalisation true (bindTC (quoteTC `ua) (\ ``ua -> typeError (termErr ``ua ∷ [])))
-
   unify (con (quote MkRev) (map varg (`apply ∷ `unapply ∷ `ua ∷ `au ∷ []))) hole
 
 R : {A B : Set} (apply : A -> B) {@(tactic R-tactic apply) rev : A <-> B} -> A <-> B
@@ -297,13 +294,13 @@ R {A} {B} _ {r} = MkRev ap unap unapap apunap
     apunap : (b : B) -> ap (unap b) ≡ b
     apunap = applyUnapply r
 
--------------------------------------------------------------------------------------
--------------------------------------- TESTS ----------------------------------------
--------------------------------------------------------------------------------------
+----------------------------------------------------------------------
+----------------------------- TESTS ----------------------------------
+----------------------------------------------------------------------
 _>>>R_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
-f >>>R g = R (
+f >>>R g = R
   \ { a -> a $| f |$ \ { b ->
-           b $| g |$ \ { c -> c }}})
+           b $| g |$ \ { c -> c }}}
 infixl 2 _>>>R_
 
 {-
@@ -315,7 +312,7 @@ _>>>R_ {A} {B} {C} f g = MkRev (
   \ { a -> _P|_|P_ {unapply-end = \ a -> a} a f \ { b ->
            _P|_|P_ {unapply-end = _} b g \ { c -> base A C (
     \ { c -> c $| un g |$ \ { b ->
-             b $| un f |$ \ { a -> a }}}) c }}}) 
+             b $| un f |$ \ { a -> a }}}) c }}})
   \ { c -> c P| un g |P \ { b ->
            b P| un f |P \ { a -> base C A (
     \ { a -> a $| f |$ \ { b ->
@@ -324,7 +321,7 @@ infixr 2 _>>>R_
 -}
 
 idR : {A : Set} -> A <-> A
-idR = R (\ { x -> x })
+idR = R \ { x -> x }
 
  -- Three different ways to compose two reversibles:
 _*R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
@@ -355,7 +352,7 @@ private
 
   data Al : Set where
     `a `b `c `d : Al
-    
+
   test-nested-sum : Either (Either Nat Nat) (Either Nat Nat) <-> Al × Nat
   test-nested-sum = R (\
     { (left  (left  x)) → x $| un idR |$ \ { x -> `a , x }
