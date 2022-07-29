@@ -11,7 +11,7 @@ open import Agda.Builtin.Bool
 
 open import Builtin.Reflection
 
-open import Reverse.Util
+open import Flipper.Util
 
 
  -- We define a new term which uses a representation of variables that

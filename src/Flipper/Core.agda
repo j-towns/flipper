@@ -14,8 +14,8 @@ open import Agda.Builtin.Nat renaming (_+_ to _+N_; _*_ to _*N_)
 
 open import Builtin.Reflection
 
-open import Reverse.Term
-open import Reverse.Util
+open import Flipper.Term
+open import Flipper.Util
 
 
 record _<->_ (A B : Set) : Set where
