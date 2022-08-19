@@ -18,6 +18,7 @@ open import Flipper.Term
 open import Flipper.Util
 
 
+infix 1 _<->_
 record _<->_ (A B : Set) : Set where
   pattern
   constructor MkRev
@@ -26,9 +27,7 @@ record _<->_ (A B : Set) : Set where
     unapply : B -> A
     unapplyApply : (a : A) -> unapply (apply a) ≡ a
     applyUnapply : (b : B) -> apply (unapply b) ≡ b
-
 open _<->_ public
-infix 1 _<->_
 
 un : {A B : Set} -> (A <-> B) -> B <-> A
 un (MkRev apply unapply ua au) = MkRev unapply apply au ua
@@ -278,27 +277,26 @@ R-tactic {A} {B} apply hole = do
   `au <- RT-to-proof unapply-rt `B `A `apply
   unify (con (quote MkRev) (map varg (`apply ∷ `unapply ∷ `ua ∷ `au ∷ []))) hole
 
-R : {A B : Set} (apply : A -> B) {@(tactic R-tactic apply) rev : A <-> B} -> A <-> B
-R {A} {B} _ {r} = MkRev ap unap unapap apunap
+F : {A B : Set} (apply : A -> B) {@(tactic R-tactic apply) rev : A <-> B} -> A <-> B
+F {A} {B} _ {r} = MkRev ap unap unapap apunap
   where
-  abstract
-    ap : A -> B
-    ap = apply r
+  ap : A -> B
+  ap = apply r
 
-    unap : B -> A
-    unap = unapply r
+  unap : B -> A
+  unap = unapply r
 
-    unapap : (a : A) -> unap (ap a) ≡ a
-    unapap = unapplyApply r
+  unapap : (a : A) -> unap (ap a) ≡ a
+  unapap = unapplyApply r
 
-    apunap : (b : B) -> ap (unap b) ≡ b
-    apunap = applyUnapply r
+  apunap : (b : B) -> ap (unap b) ≡ b
+  apunap = applyUnapply r
 
 ----------------------------------------------------------------------
 ----------------------------- TESTS ----------------------------------
 ----------------------------------------------------------------------
 _>>>R_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
-f >>>R g = R
+f >>>R g = F
   \ { a -> a $| f |$ \ { b ->
            b $| g |$ \ { c -> c }}}
 infixl 2 _>>>R_
@@ -314,54 +312,54 @@ _>>>R_ {A} {B} {C} f g = MkRev (
     \ { c -> c $| un g |$ \ { b ->
              b $| un f |$ \ { a -> a }}}) c }}})
   \ { c -> c P| un g |P \ { b ->
-           b P| un f |P \ { a -> base C A (
+           b P| un f |P \ { a -> base
     \ { a -> a $| f |$ \ { b ->
              b $| g |$ \ { c -> c }}}) a }}}
 infixr 2 _>>>R_
 -}
 
 idR : {A : Set} -> A <-> A
-idR = R \ { x -> x }
+idR = F \ { x -> x }
 
  -- Three different ways to compose two reversibles:
 _*R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
-f *R g = R \ { (a , b) → a $| f |$ \ { c
+f *R g = F \ { (a , b) → a $| f |$ \ { c
                        → b $| g |$ \ { d → (c , d) } } }
 
 _+R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
-f +R g = R (\ { (left  a) → a $| f |$ \ { c -> left  c }
+f +R g = F (\ { (left  a) → a $| f |$ \ { c -> left  c }
               ; (right b) → b $| g |$ \ { d -> right d } })
 
 R≡ : {A B : Set} -> A ≡ B -> A <-> B
-R≡ refl = R (\ { x -> x})
+R≡ refl = F (\ { x -> x})
 
 private
   pair-swp : {A B : Set} -> A × B <-> B × A
-  pair-swp = R (\{ (a , b) -> b , a})
+  pair-swp = F \ { (a , b) → (b , a) }
 
   sum-swp : {A B : Set} -> Either A B <-> Either B A
-  sum-swp = R (\ { (left a)  → right a
+  sum-swp = F (\ { (left a)  → right a
                  ; (right b) → left b })
 
   uncurryR : {A B C : Set} -> (A -> B <-> C) -> A × B <-> A × C
-  uncurryR f = R (\ {
+  uncurryR f = F (\ {
     (a , b) -> b $| f a |$ \ { c -> (a , c) }})
 
   uncurryR' : {A : Set} {B C : A -> Set} -> ((a : A) -> B a <-> C a) -> Σ A B <-> Σ A C
-  uncurryR' f = R \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
+  uncurryR' f = F \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
 
   data Al : Set where
     `a `b `c `d : Al
 
   test-nested-sum : Either (Either Nat Nat) (Either Nat Nat) <-> Al × Nat
-  test-nested-sum = R (\
+  test-nested-sum = F (\
     { (left  (left  x)) → x $| un idR |$ \ { x -> `a , x }
     ; (left  (right x)) → `b , x
     ; (right (left  x)) → `c , x
     ; (right (right x)) → `d , x })
 
   test-composed : Either (Nat × Nat) Nat <-> Either Nat (Nat × Nat)
-  test-composed = R (
+  test-composed = F (
     \ { (left (m , n)) -> m $| idR |$ \ { m' ->
                           n $| idR |$ \ { n' -> right (n' , m') }}
       ; (right x)      ->                       left x })
