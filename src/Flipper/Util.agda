@@ -39,6 +39,12 @@ data SnocList (A : Set) : Set where
   [] : SnocList A
   _-,_ : SnocList A -> A -> SnocList A
 
+infixr 5 _++S_
+
+_++S_ : forall {A} -> SnocList A -> List A -> SnocList A
+xs ++S []       = xs
+xs ++S (y ∷ ys) = (xs -, y) ++S ys
+
  -- TODO: Import these list functions from somewhere else...
 
 list-reverse : {A : Set} -> List A -> SnocList A
