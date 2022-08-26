@@ -15,54 +15,6 @@ open import Builtin.Reflection
 open import Flipper.Util
 
 
- -- We define a new term which uses a representation of variables that
- -- makes reversal straightforward.
-data Var : Set where
-   -- Non 'reversible' variables are referred to by De Bruijn index
-  inner-db outer-db : Nat -> Var
-
-   -- Reversible variables are referred to by name
-  rev : String -> Var
-
-data Term'    : Set
-data Sort'    : Set
-data Pattern' : Set
-data Clause'  : Set
-Type' = Term'
-
-data Term' where
-  var       : (x : Var)  (args : List (Arg (Term'))) → Term'
-  con       : (c : Name) (args : List (Arg (Term'))) → Term'
-  def       : (f : Name) (args : List (Arg (Term'))) → Term'
-  lam       : (v : Visibility) (t : Abs (Term')) → Term'
-  pat-lam   : (cs : List (Clause')) (args : List (Arg (Term'))) → Term'
-  pi        : (a : Arg (Type')) (b : Abs (Type')) → Term'
-  agda-sort : (s : Sort') → Term'
-  lit       : (l : Literal) → Term'
-  meta      : (x : Meta) → List (Arg (Term')) → Term'
-  unknown   : Term'
-
-data Sort' where
-  set     : (t : Term') → Sort'
-  lit     : (n : Nat) → Sort'
-  prop    : (t : Term') → Sort'
-  propLit : (n : Nat) → Sort'
-  inf     : (n : Nat) → Sort'
-  unknown : Sort'
-
-data Pattern' where
-  con    : (c : Name) (ps : List (Arg (Pattern'))) → Pattern'
-  dot    : (t : Term') → Pattern'
-  var    : (x : Var)      → Pattern'
-  lit    : (l : Literal)  → Pattern'
-  proj   : (f : Name)     → Pattern'
-  absurd : (x : Var)      → Pattern'  -- absurd patterns count as variables
-
-data Clause' where
-  clause        : (tel : List (Σ String λ _ → Arg (Type'))) (ps : List (Arg (Pattern')))
-    (t : Term') → Clause'
-  absurd-clause : (tel : List (Σ String λ _ → Arg (Type'))) (ps : List (Arg (Pattern'))) → Clause'
-
 data Quant : Set where
   qzero qone : Quant
 
