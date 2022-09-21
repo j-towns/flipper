@@ -18,18 +18,10 @@ open import Flipper.Util
 data Quant : Set where
   qzero qone : Quant
 
-Context : Set
-Context = SnocList String
-
-C-lookup : Context -> String -> TC Nat
-C-lookup [] v = typeErrorS $ "Couldn't find name " & v & " in context."
-C-lookup (ctx -, nm) v with str-eq nm v
-... | false = return ∘ suc =<< (C-lookup ctx v)
-... | true  = return zero
-
 data QVar : Set where
   vv : Quant -> String -> QVar  -- visible
   hv : QVar                     -- hidden, references will be replaced
+                                -- by `unknown`
 QContext : Set
 QContext = SnocList QVar
 
@@ -49,9 +41,17 @@ QC-use (ctx -, x)           (suc i) = do
   ctx , nmty <- QC-use ctx i
   return $ (ctx -, x) , nmty
 
+QC-lookup : QContext -> String -> TC Nat
+QC-lookup [] v = typeErrorS $ "Couldn't find name " & v & " in context."
+QC-lookup (ctx -, vv qzero nm) v = typeErrorS $ "Internal Flipper error." -- should be unreachable
+QC-lookup (ctx -, vv qone  nm) v = if str-eq nm v
+  then return zero
+  else return ∘ suc =<< QC-lookup ctx v
+QC-lookup (ctx -, hv) v = return ∘ suc =<< QC-lookup ctx v
+
  -- Based on https://github.com/UlfNorell/agda-prelude/blob/3d143d/src/Tactic/Reflection/Free.agda
- -- We use this to store keep track of all the variables which are
- -- in scope in a Flippable.
+ -- We use this to keep track of all the variables which are in scope
+ -- in a Flippable.
 VarSet = SnocList String  -- ordered
 
  -- disjoint union (error on duplicate)
@@ -62,7 +62,7 @@ xs        ∪ []        = return xs
   case-cmp compare x y
     less    _ => return ∘ (_-, y) =<< (xs -, x) ∪ ys
     equal   _ => typeErrorS
-      "Shadowed names are not currently allowed in Flippables."
+      "Shadowed names are not allowed in Flippables."
     greater _ => return ∘ (_-, x) =<< xs ∪ (ys -, y)
 
 _setminus_ : VarSet -> VarSet -> TC VarSet
@@ -79,16 +79,24 @@ xs       setminus []         = return xs
 ∅ : VarSet
 ∅ = []
 
-toVarSet : List String -> TC VarSet
-toVarSet (nm ∷ rest) = do
-  rest <- toVarSet rest
+QC-to-VarSet : QContext -> TC VarSet
+QC-to-VarSet [] = return []
+QC-to-VarSet (ctx -, vv qzero _) = QC-to-VarSet ctx
+QC-to-VarSet (ctx -, vv qone nm) = do
+  rest <- QC-to-VarSet ctx
   all <- rest ∪ ([] -, nm)
   return all 
-toVarSet [] = return [] 
+QC-to-VarSet (ctx -, hv)         = QC-to-VarSet ctx
+
+VarSet-lookup : VarSet -> String -> TC Nat
+VarSet-lookup [] v = typeErrorS $ "Couldn't find name " & v & " in VarSet."
+VarSet-lookup (ctx -, nm) v with str-eq nm v
+... | false = return ∘ suc =<< (VarSet-lookup ctx v)
+... | true  = return zero
 
 {-# TERMINATING #-}
-pack-vars : QContext -> VarSet -> Term -> TC Term
-pack-vars ctx vars = pack zero
+pack-vars' : QContext -> VarSet -> Term -> TC Term
+pack-vars' ctx vars = pack zero
   where
   ctx-len = slist-length ctx
   vars-len = slist-length vars
@@ -99,7 +107,7 @@ pack-vars ctx vars = pack zero
   pack-var depth x | false | false = return (left (x +N vars-len -N ctx-len))
   pack-var depth x | false | true  = 
     QC-index ctx (x -N depth) >>=
-    \ { (left  nm) -> C-lookup vars nm >>= \ i -> return (left (i +N depth))
+    \ { (left  nm) -> VarSet-lookup vars nm >>= \ i -> return (left (i +N depth))
       ; (right <>) -> return (right <>) } 
   pack-var depth x | true = return (left x)
 
@@ -166,3 +174,8 @@ pack-vars ctx vars = pack zero
     ty <- pack depth ty
     tel <- pack-tel (suc depth) tel
     return ((nm , arg i ty) ∷ tel)
+
+pack-vars : QContext -> Term -> TC Term
+pack-vars ctx t = do
+  vars <- QC-to-VarSet ctx
+  pack-vars' ctx vars t

@@ -41,6 +41,8 @@ data SnocList (A : Set) : Set where
 
 infixr 5 _++S_
 
+
+
 _++S_ : forall {A} -> SnocList A -> List A -> SnocList A
 xs ++S []       = xs
 xs ++S (y ∷ ys) = (xs -, y) ++S ys
