@@ -3,6 +3,7 @@ module Flipper.Core where
 open import Prelude renaming (reverse to list-reverse')
   hiding (abs; flip; Fin; natToFin)
 open import Container.Traversable
+open import Tactic.Reflection hiding (VarSet)
 open import Tactic.Reflection.DeBruijn
 
 
@@ -47,7 +48,10 @@ private
   {-# TERMINATING #-}
   flatten : FPat -> List String
   flatten (con c ps) = ps >>= flatten
-  flatten (var nm) = [ nm ]
+  flatten (var nm) = return nm
+
+  toVarSet : List String -> TC VarSet
+  toVarSet = {!!}
 
   record FEqn : Set where
     pattern
@@ -78,10 +82,10 @@ private
 
   reverse-br : FBranch -> FBranch
   reverse-br (branch inp eqns outp) =
-    branch outp (list-reverse' (fmap reverse-eqn eqns)) inp
+    branch outp (list-reverse' (reverse-eqn <$> eqns)) inp
 
   reverse : FTerm -> FTerm
-  reverse (MkFT branches) = MkFT (fmap reverse-br branches)
+  reverse (MkFT branches) = MkFT (reverse-br <$> branches)
 
    -- We use pattern matching on these 'ok' forms to lossily
    -- transform from Term to FTerm. Any pattern that isn't ok
@@ -167,7 +171,7 @@ private
 
     Term-to-FTerm : Term -> TC FTerm
     Term-to-FTerm (ok-pat-lam cs) =
-      fmap MkFT $ traverse Clause-to-FBranch $ filter not-absurd cs
+      MkFT <$> (traverse Clause-to-FBranch $ filter not-absurd cs)
       where
       not-absurd = \ where
         (absurd-clause _ _) -> false
@@ -180,67 +184,66 @@ private
     private
       process-tel : QContext -> FPat -> QContext × List (String × Arg Type)
       process-tel ctx p = let flat = flatten p in
-        (ctx ++S map (vv qone) flat) , map (\ nm -> nm , varg unknown) flat
+        (ctx ++S map (vv qone) flat) , map (_, varg unknown) flat
         
       {-# TERMINATING #-}
       FPat-to-Pattern : QContext -> FPat -> TC Pattern
       FPat-to-Pattern ctx (con c ps) =
         return ∘ con c ∘ map varg =<< traverse (FPat-to-Pattern ctx) ps
-      FPat-to-Pattern ctx (var nm) = return ∘ var =<< QC-lookup ctx nm
+      FPat-to-Pattern ctx (var nm) = return ∘ var =<< QC-lookup' ctx nm
 
       {-# TERMINATING #-}
-      FPat-to-Term : QContext -> FPat -> TC Term
-      FPat-to-Term ctx (con c ps) =
-        return ∘ con c ∘ map varg =<< traverse (FPat-to-Term ctx) ps
-      FPat-to-Term ctx (var nm) =
-        (\ x -> return (var x [])) =<< QC-lookup ctx nm
+      FPat-to-Term : QContext -> FPat -> TC (QContext × Term)
+      FPat-to-Term ctx (var nm) = do
+        ctx , x <- QC-lookup ctx nm
+        return (ctx , var₀ x)
+      FPat-to-Term ctx (con c ps) = {!!}
+         -- return ∘ con c ∘ map varg =<< traverse (FPat-to-Term ctx) ps
 
-      remap-vars : QContext -> VarSet -> TC (List Nat)
-      remap-vars ctx = helper []
+      mk-args : QContext -> TC (List Nat)
+      mk-args ctx = QC-to-VarSet ctx >>= remap-vars ctx
         where
-        helper : List Nat -> VarSet -> TC (List Nat)
-        helper done [] = return done
-        helper done (vars -, nm) = do
-          x <- QC-lookup ctx nm
-          helper (x ∷ done) vars
+        remap-vars : QContext -> VarSet -> TC (List Nat)
+        remap-vars ctx = helper []
+          where
+          helper : List Nat -> VarSet -> TC (List Nat)
+          helper done [] = return done
+          helper done (vars -, nm) = do
+            x <- QC-lookup' ctx nm
+            helper (x ∷ done) vars
 
       branch-length : FBranch -> Nat
       branch-length (branch _ eqns _) = length eqns
 
       reverse-cumsum : List Nat -> List Nat
       reverse-cumsum []       = []
-      reverse-cumsum (x ∷ xs) with reverse-cumsum xs
-      ... | [] = [ 0 ]
-      ... | sum ∷ rest = x + sum ∷ sum ∷ rest
+      reverse-cumsum (x ∷ xs) = case reverse-cumsum xs of \ where
+        []           -> [ 0 ]
+        (sum ∷ rest) -> x + sum ∷ sum ∷ rest
 
       FTerm-to-apply : FTerm -> TC Term
-      FTerm-to-apply (MkFT bs) = return ∘ ok-pat-lam =<< traverse process-branch bs-lengths
+      FTerm-to-apply (MkFT bs) = return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
         where
-        bs-lengths = zip (reverse-cumsum (map branch-length bs)) bs
+        branch-lengths = zip (reverse-cumsum (map branch-length bs)) bs
         process-branch : Nat × FBranch -> TC Clause
         process-branch (skip , (branch inp eqns outp)) = do
           let ctx , tel = process-tel [] inp
-          invars <- toVarSet $ flatten inp
-          inp <- fmap varg $ FPat-to-Pattern ctx inp
-          term <- process-term ctx invars eqns outp
-          return (ok-clause tel inp term)
+          inp <- FPat-to-Pattern ctx inp
+          term <- process-term ctx eqns outp
+          return (ok-clause tel (varg inp) term)
           where
-          process-term : QContext -> VarSet -> List FEqn -> FPat -> TC Term
-          process-term ctx vars [] outp = FPat-to-Term ctx outp
-          process-term ctx vars (MkFEqn argp fn resp ∷ eqns) outp = do
-            argvars <- toVarSet $ flatten argp
-            vars <- vars setminus argvars
-            argp <- FPat-to-Term ctx argp
-            fn-args <- remap-vars ctx vars
-            let fn = var (skip + slist-length ctx + length eqns) (map (\ x -> varg $ var x []) fn-args)
-            resvars <- toVarSet $ flatten resp
-            vars <- vars ∪ resvars
+          process-term : QContext -> List FEqn -> FPat -> TC Term
+          process-term ctx [] outp = snd <$> FPat-to-Term ctx outp
+          process-term ctx (MkFEqn argp fn resp ∷ eqns) outp = do
+            ctx , argp <- FPat-to-Term ctx argp
+            fn-args <- mk-args ctx
+            let fn = var (skip + slist-length ctx + length eqns) (map (varg ∘ var₀) fn-args)
             let ctx , res-tel = process-tel ctx resp
-            respat <- fmap varg $ FPat-to-Pattern ctx resp
-            rest-term <- process-term ctx vars eqns outp
+            respat <- varg <$> FPat-to-Pattern ctx resp
+            rest-term <- process-term ctx eqns outp
             return (reduced-cons argp fn res-tel respat rest-term)
 
-      get-fs : FTerm -> List (Term × Type)
+      get-fs : FTerm -> List Term
       get-fs (MkFT bs) = bs >>= (\ (branch _ eqns _) -> map (\ (MkFEqn _ f _) -> f) eqns )
 
     FT-to-Flippable : FTerm -> TC Term

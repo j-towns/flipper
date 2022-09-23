@@ -41,13 +41,16 @@ QC-use (ctx -, x)           (suc i) = do
   ctx , nmty <- QC-use ctx i
   return $ (ctx -, x) , nmty
 
-QC-lookup : QContext -> String -> TC Nat
+QC-lookup : QContext -> String -> TC (QContext × Nat)
 QC-lookup [] v = typeErrorS $ "Couldn't find name " & v & " in context."
 QC-lookup (ctx -, vv qzero nm) v = typeErrorS $ "Internal Flipper error." -- should be unreachable
 QC-lookup (ctx -, vv qone  nm) v = if str-eq nm v
-  then return zero
-  else return ∘ suc =<< QC-lookup ctx v
-QC-lookup (ctx -, hv) v = return ∘ suc =<< QC-lookup ctx v
+  then return ((ctx -, vv qzero nm) , zero)
+  else QC-lookup ctx v >>= \ (ctx , x) -> return ((ctx -, vv qone nm) , suc x)
+QC-lookup (ctx -, hv) v = QC-lookup ctx v >>= \ (ctx , x) -> return ((ctx -, hv) , (suc x))
+
+QC-lookup' : QContext -> String -> TC Nat
+QC-lookup' ctx nm = fmap snd $ QC-lookup ctx nm
 
  -- Based on https://github.com/UlfNorell/agda-prelude/blob/3d143d/src/Tactic/Reflection/Free.agda
  -- We use this to keep track of all the variables which are in scope
