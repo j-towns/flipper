@@ -219,11 +219,14 @@ private
       branch-length : FBranch -> Nat
       branch-length (branch _ eqns _) = length eqns
 
-      reverse-cumsum : List Nat -> List Nat
-      reverse-cumsum []       = []
-      reverse-cumsum (x ∷ xs) = case reverse-cumsum xs of \ where
-        []           -> [ 0 ]
+      reverse-cumsum' : forall {n} -> Vec Nat n -> Vec Nat n
+      reverse-cumsum' []           = []
+      reverse-cumsum' (x ∷ [])     = 0 ∷ []
+      reverse-cumsum' (y ∷ x ∷ xs) = case reverse-cumsum' (x ∷ xs) of \ where
         (sum ∷ rest) -> x + sum ∷ sum ∷ rest
+
+      reverse-cumsum : List Nat -> List Nat
+      reverse-cumsum = vecToList ∘ reverse-cumsum' ∘ listToVec
 
       FTerm-to-apply : FTerm -> TC Term
       FTerm-to-apply (MkFT bs) = return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
@@ -382,6 +385,7 @@ F-tactic {A} {B} apply hole = do
   ft <- Term-to-FTerm `apply
   `hole-ty <- inferType hole
   `flippable <- FT-to-Flippable ft `hole-ty
+   -- typeError {!termErr `flippable ∷ []!}
   unify `flippable hole
 
 F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B
@@ -541,12 +545,10 @@ _>>>R_ {A} {B} {C} f g = MkF (
     \ { a -> a $| f |$ \ { b ->
              b $| g |$ \ { c -> c }}}) a }}}
 infixr 2 _>>>R_
--}
 
-{-
+-}
 idR : {A : Set} -> A <-> A
 idR = F \ { x -> x }
--}
 
  -- Three different ways to compose two reversibles:
 _*R'_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
@@ -595,7 +597,7 @@ private
   uncurryR' : {A : Set} {B C : A -> Set} -> ((a : A) -> B a <-> C a) -> Σ A B <-> Σ A C
   uncurryR' f = F \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
 
-{-
+private
   data Al : Set where
     `a `b `c `d : Al
 
@@ -611,4 +613,3 @@ private
     \ { (left (m , n)) -> m $| idR |$ \ { m' ->
                           n $| idR |$ \ { n' -> right (n' , m') }}
       ; (right x)      ->                       left x })
--}
