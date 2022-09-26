@@ -1,6 +1,6 @@
 module Flipper.Core where
 
-open import Prelude renaming (reverse to list-reverse')
+open import Prelude renaming (reverse to list-reverse)
   hiding (abs; flip; Fin; natToFin)
 open import Container.Traversable
 open import Tactic.Reflection hiding (VarSet)
@@ -50,9 +50,6 @@ private
   flatten (con c ps) = ps >>= flatten
   flatten (var nm) = return nm
 
-  toVarSet : List String -> TC VarSet
-  toVarSet = {!!}
-
   record FEqn : Set where
     pattern
     constructor MkFEqn
@@ -82,7 +79,7 @@ private
 
   reverse-br : FBranch -> FBranch
   reverse-br (branch inp eqns outp) =
-    branch outp (list-reverse' (reverse-eqn <$> eqns)) inp
+    branch outp (list-reverse (reverse-eqn <$> eqns)) inp
 
   reverse : FTerm -> FTerm
   reverse (MkFT branches) = MkFT (reverse-br <$> branches)
@@ -106,7 +103,6 @@ private
       varg argpat ∷
       varg rev-fn ∷
       varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
-  pattern flippable `apply = def (quote MkF) (varg `apply ∷ varg unknown ∷ varg unknown ∷ varg unknown ∷ [])
 
   module T-to-FT where
     private
@@ -190,15 +186,23 @@ private
       FPat-to-Pattern : QContext -> FPat -> TC Pattern
       FPat-to-Pattern ctx (con c ps) =
         return ∘ con c ∘ map varg =<< traverse (FPat-to-Pattern ctx) ps
-      FPat-to-Pattern ctx (var nm) = return ∘ var =<< QC-lookup' ctx nm
+      FPat-to-Pattern ctx (var nm) = return ∘ var =<< QC-lookup ctx nm
 
       {-# TERMINATING #-}
       FPat-to-Term : QContext -> FPat -> TC (QContext × Term)
       FPat-to-Term ctx (var nm) = do
-        ctx , x <- QC-lookup ctx nm
+        ctx , x <- QC-use' ctx nm
         return (ctx , var₀ x)
-      FPat-to-Term ctx (con c ps) = {!!}
-         -- return ∘ con c ∘ map varg =<< traverse (FPat-to-Term ctx) ps
+      FPat-to-Term ctx (con c ps) = do
+        ctx , ts <- helper ctx ps
+        return (ctx , (con c (map vArg ts)))
+        where
+        helper : QContext -> List FPat -> TC (QContext × List Term)
+        helper ctx [] = return (ctx , [])
+        helper ctx (p ∷ ps) = do
+          ctx , t  <- FPat-to-Term ctx p
+          ctx , ts <- helper ctx ps
+          return (ctx , t ∷ ts)
 
       mk-args : QContext -> TC (List Nat)
       mk-args ctx = QC-to-VarSet ctx >>= remap-vars ctx
@@ -209,7 +213,7 @@ private
           helper : List Nat -> VarSet -> TC (List Nat)
           helper done [] = return done
           helper done (vars -, nm) = do
-            x <- QC-lookup' ctx nm
+            x <- QC-lookup ctx nm
             helper (x ∷ done) vars
 
       branch-length : FBranch -> Nat
@@ -246,35 +250,56 @@ private
       get-fs : FTerm -> List Term
       get-fs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ f _) -> f) eqns
 
-      mk-ty : FTerm -> Type
+      mk-ty : FTerm -> TC Type
       mk-ty =
-        foldr (\ { fn-ty rest -> pi (varg fn-ty) (abs "_" rest) })
-        unknown ∘ map mk-fn-ty ∘ get-names
+        (fmap (foldr (\ { fn-ty rest -> pi (varg fn-ty) (abs "_" rest) })
+        unknown ∘ map mk-fn-ty)) ∘ get-names
         where
-        get-names : FTerm -> List (List String)
-        get-names (MkFT bs) = bs >>= process-branch
+        get-names : FTerm -> TC (List (List String))
+        get-names (MkFT bs) = fmap concat (traverse process-branch bs)
           where
-          process-branch : FBranch -> List (List String)
+          process-branch : FBranch -> TC (List (List String))
           process-branch (branch inp eqns outp) =
             let ctx , _ = process-tel [] inp in process-eqns ctx eqns
             where
-            process-eqns : QContext -> List FEqn -> (List (List String))
-            process-eqns ctx [] = []
-            process-eqns ctx (MkFEqn argp fn resp ∷ eqns) = {!!}
-          
+            process-eqns : QContext -> List FEqn -> TC (List (List String))
+            process-eqns ctx [] = return []
+            process-eqns ctx (MkFEqn argp fn resp ∷ eqns) = do
+              ctx , _ <- FPat-to-Term ctx argp
+              nms <- fmap slist-to-list $ QC-to-VarSet ctx
+              let ctx , _ = process-tel ctx resp
+              rest <- process-eqns ctx eqns
+              return (nms ∷ rest)
 
         mk-fn-ty : List String -> Type
         mk-fn-ty =
           foldr (\ { nm rest -> pi (varg unknown) (abs nm rest) })
           unknown
 
+      mk-tel : Nat -> Telescope
+      mk-tel n =
+        zip (zipWith _&_ (replicate n "f") (map show (from 0 for n)))
+          (replicate n (vArg unknown))
+
+      mk-outer-args : Nat -> List (Arg Pattern)
+      mk-outer-args n = map (vArg ∘ var) (list-reverse (from 0 to n))
+
+      num-eqns : FTerm -> Nat
+      num-eqns (MkFT bs) = sum (map branch-length bs)
+
+
+      pattern Finner `apply `unapply `ua `au = def (quote MkF) (varg `apply ∷ varg `unapply ∷ varg `ua ∷ varg `au ∷ [])
+      pattern Fouter ty tel args inner = def (quote id) (hArg unknown ∷ hArg ty ∷ vArg (pat-lam (clause tel args inner ∷ []) []) ∷ [])
+
     FT-to-Flippable : FTerm -> TC Term
     FT-to-Flippable ft = do
       `apply <- FTerm-to-apply ft
+      let ft-reversed = reverse ft
+      `unapply <- FTerm-to-apply ft-reversed
       let fs = get-fs ft
-      let `term = def (quote id) (hArg unknown ∷ hArg {!!} ∷ vArg (pat-lam (clause {!!} {!!} {!!} ∷ []) []) ∷ [])
-      let `f = flippable `apply
-      {!!}
+      ty <- mk-ty ft
+      let `f = Finner `apply `unapply {!!} {!!}
+      return (Fouter ty (mk-tel (num-eqns ft)) (mk-outer-args (num-eqns ft)) `f) 
      
 
      -- Proof building
@@ -334,8 +359,8 @@ F-tactic {A} {B} apply hole = do
   `flippable <- FT-to-Flippable ft
   unify `flippable hole
 
-F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) rev : A <-> B} -> A <-> B
-F {A} {B} _ {r} = r
+F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B
+F {A} {B} _ {f} = f
 
 ----------------------------------------------------------------------
 ----------------------------- TESTS ----------------------------------

@@ -42,8 +42,14 @@ _++S_ : forall {A} -> SnocList A -> List A -> SnocList A
 xs ++S []       = xs
 xs ++S (y ∷ ys) = (xs -, y) ++S ys
 
- -- list-to-slist : {A : Set} -> List A -> SnocList A
- -- list-to-slist = foldl _-,_ []
+list-to-slist : {A : Set} -> List A -> SnocList A
+list-to-slist = foldl _-,_ []
+
+slist-to-list : forall {A} -> SnocList A -> List A
+slist-to-list = go [] where
+  go : forall {A} -> List A -> SnocList A -> List A
+  go acc []        = acc
+  go acc (as -, a) = go (a ∷ acc) as
 
 slist-index : {A : Set} -> SnocList A -> Nat -> TC A
 slist-index []        _       = typeErrorS "List index error"
