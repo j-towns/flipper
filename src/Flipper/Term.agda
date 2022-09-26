@@ -43,7 +43,9 @@ QC-use (ctx -, x)           (suc i) = do
 
 QC-use' : QContext -> String -> TC (QContext × Nat)
 QC-use' [] v = typeErrorS $ "Couldn't find name " & v & " in context."
-QC-use' (ctx -, vv qzero nm) v = typeErrorS $ "Internal Flipper error." -- should be unreachable
+QC-use' (ctx -, vv qzero nm) v = if nm ==? v
+  then typeErrorS $ "Internal Flipper error."  -- should be unreachable
+  else QC-use' ctx v >>= \ (ctx , x) -> return ((ctx -, hv) , (suc x))
 QC-use' (ctx -, vv qone  nm) v = if nm ==? v
   then return ((ctx -, vv qzero nm) , zero)
   else QC-use' ctx v >>= \ (ctx , x) -> return ((ctx -, vv qone nm) , suc x)
@@ -97,12 +99,21 @@ VarSet-lookup (ctx -, nm) v = if nm ==? v
   then return zero
   else return ∘ suc =<< (VarSet-lookup ctx v)
 
+pattern packed-fn tel ps t = pat-lam (clause tel ps t ∷ []) []
+
 {-# TERMINATING #-}
 pack-vars' : QContext -> VarSet -> Term -> TC Term
-pack-vars' ctx vars = pack zero
+pack-vars' ctx vars t = do
+  t <- pack zero t
+  let vars-ls = slist-to-list vars
+  let num-vars = length vars-ls
+  return (packed-fn (zip vars-ls (replicate num-vars (vArg unknown)) ) (mk-ps num-vars) t)
   where
   ctx-len = slist-length ctx
   vars-len = slist-length vars
+
+  mk-ps : Nat -> List (Arg Pattern)
+  mk-ps n = map (vArg ∘ var) (reverse (from 0 for n))
   
   pack-var : (depth : Nat) -> (x : Nat) -> TC (Nat ⊎ One)
   pack-var depth x with x <N depth
