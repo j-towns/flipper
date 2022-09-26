@@ -244,7 +244,29 @@ private
             return (reduced-cons argp fn res-tel respat rest-term)
 
       get-fs : FTerm -> List Term
-      get-fs (MkFT bs) = bs >>= (\ (branch _ eqns _) -> map (\ (MkFEqn _ f _) -> f) eqns )
+      get-fs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ f _) -> f) eqns
+
+      mk-ty : FTerm -> Type
+      mk-ty =
+        foldr (\ { fn-ty rest -> pi (varg fn-ty) (abs "_" rest) })
+        unknown ∘ map mk-fn-ty ∘ get-names
+        where
+        get-names : FTerm -> List (List String)
+        get-names (MkFT bs) = bs >>= process-branch
+          where
+          process-branch : FBranch -> List (List String)
+          process-branch (branch inp eqns outp) =
+            let ctx , _ = process-tel [] inp in process-eqns ctx eqns
+            where
+            process-eqns : QContext -> List FEqn -> (List (List String))
+            process-eqns ctx [] = []
+            process-eqns ctx (MkFEqn argp fn resp ∷ eqns) = {!!}
+          
+
+        mk-fn-ty : List String -> Type
+        mk-fn-ty =
+          foldr (\ { nm rest -> pi (varg unknown) (abs nm rest) })
+          unknown
 
     FT-to-Flippable : FTerm -> TC Term
     FT-to-Flippable ft = do

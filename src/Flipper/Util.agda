@@ -7,7 +7,7 @@ open import Agda.Builtin.String
 open import Agda.Builtin.Bool
 open import Agda.Builtin.List
 open import Agda.Builtin.Nat renaming (_+_ to _+N_; _*_ to _*N_)
-open import Agda.Builtin.Reflection
+open import Builtin.Reflection
 
 
 pattern default-modality = modality relevant quantity-ω
@@ -21,9 +21,6 @@ pattern iarg x = arg (arg-info instance′ _               ) x
 is-visible : {A : Set} -> Arg A -> Bool
 is-visible (varg _) = true
 is-visible _ = false
-
-str-eq : String -> String -> Bool
-str-eq = primStringEquality
 
 _⊎_ : (A B : Set) -> Set
 A ⊎ B = Either A B
@@ -41,29 +38,18 @@ data SnocList (A : Set) : Set where
 
 infixr 5 _++S_
 
-
-
 _++S_ : forall {A} -> SnocList A -> List A -> SnocList A
 xs ++S []       = xs
 xs ++S (y ∷ ys) = (xs -, y) ++S ys
 
- -- TODO: Import these list functions from somewhere else...
+ -- list-to-slist : {A : Set} -> List A -> SnocList A
+ -- list-to-slist = foldl _-,_ []
 
-list-reverse : {A : Set} -> List A -> SnocList A
-list-reverse = go []
-  where go : {A : Set} -> SnocList A -> List A -> SnocList A
-        go acc [] = acc
-        go acc (a ∷ as) = go (acc -, a) as
-
-slist-index : {A : Set} -> Nat -> SnocList A -> TC A
-slist-index _       []        = typeError (strErr "List index error" ∷ [])
-slist-index zero    (_ -, a)  = returnTC a
-slist-index (suc n) (as -, _) = slist-index n as
+slist-index : {A : Set} -> SnocList A -> Nat -> TC A
+slist-index []        _       = typeErrorS "List index error"
+slist-index (_  -, a) zero    = return a
+slist-index (as -, _) (suc n) = slist-index as n
 
 slist-length : {A : Set} -> SnocList A -> Nat
 slist-length [] = zero
 slist-length (as -, _) = suc (slist-length as)
-
- -- From https://hackage.haskell.org/package/base-4.16.2.0/docs/src/Data.Foldable.html#foldlM
-foldlM : {A B : Set}{M : Set -> Set}{{_ : Monad M}} -> (B -> A -> M B) -> B -> List A -> M B
-foldlM f z0 xs = foldr (\ { x k z -> f z x >>= k }) return xs z0

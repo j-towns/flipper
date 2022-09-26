@@ -34,7 +34,7 @@ QC-index (ctx -, _)           (suc i) = QC-index ctx i
 
 QC-use : QContext -> Nat -> TC (QContext × String)
 QC-use []                   i       = typeErrorS "Invalid variable lookup." -- this should be unreachable
-QC-use (ctx -, vv qzero nm) zero    = typeErrorS $ "Attempt to re-use used variable " & nm & ". "
+QC-use (ctx -, vv qzero nm) zero    = typeErrorS $ "Attempt to re-use used variable " & nm & "."
 QC-use (ctx -, vv qone  nm) zero    = return ((ctx -, vv qzero nm) , nm)
 QC-use (ctx -, hv)          zero    = typeErrorS "Attempt to use hidden variable."
 QC-use (ctx -, x)           (suc i) = do
@@ -44,7 +44,7 @@ QC-use (ctx -, x)           (suc i) = do
 QC-lookup : QContext -> String -> TC (QContext × Nat)
 QC-lookup [] v = typeErrorS $ "Couldn't find name " & v & " in context."
 QC-lookup (ctx -, vv qzero nm) v = typeErrorS $ "Internal Flipper error." -- should be unreachable
-QC-lookup (ctx -, vv qone  nm) v = if str-eq nm v
+QC-lookup (ctx -, vv qone  nm) v = if nm ==? v
   then return ((ctx -, vv qzero nm) , zero)
   else QC-lookup ctx v >>= \ (ctx , x) -> return ((ctx -, vv qone nm) , suc x)
 QC-lookup (ctx -, hv) v = QC-lookup ctx v >>= \ (ctx , x) -> return ((ctx -, hv) , (suc x))
@@ -93,9 +93,9 @@ QC-to-VarSet (ctx -, hv)         = QC-to-VarSet ctx
 
 VarSet-lookup : VarSet -> String -> TC Nat
 VarSet-lookup [] v = typeErrorS $ "Couldn't find name " & v & " in VarSet."
-VarSet-lookup (ctx -, nm) v with str-eq nm v
-... | false = return ∘ suc =<< (VarSet-lookup ctx v)
-... | true  = return zero
+VarSet-lookup (ctx -, nm) v = if nm ==? v
+  then return zero
+  else return ∘ suc =<< (VarSet-lookup ctx v)
 
 {-# TERMINATING #-}
 pack-vars' : QContext -> VarSet -> Term -> TC Term
