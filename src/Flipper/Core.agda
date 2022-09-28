@@ -47,15 +47,18 @@ private
 
   {-# TERMINATING #-}
   flatten : FPat -> List String
-  flatten (con c ps) = ps >>= flatten
-  flatten (var nm) = return nm
+  flatten (con c ps) = concatMap flatten ps
+  flatten (var nm) = [ nm ]
 
   record FEqn : Set where
     pattern
     constructor MkFEqn
     field
       argp : FPat
-      fn : Term
+       -- The VarSet stores the names in scope. The Term is a pattern
+       -- lambda abstraction, the type is a pi-abstraction; both
+       -- are abstracted over the VarSet.
+      fn : VarSet × Term × Type
       resp : FPat
 
   record FBranch : Set where
@@ -72,28 +75,16 @@ private
     field
       branches : List FBranch
 
-   -- Reversal transformation
-  reverse-eqn : FEqn -> FEqn
-  reverse-eqn (MkFEqn argp fn resp) =
-    MkFEqn resp (def (quote flip) (varg fn ∷ [])) argp
-
-  reverse-br : FBranch -> FBranch
-  reverse-br (branch inp eqns outp) =
-    branch outp (list-reverse (reverse-eqn <$> eqns)) inp
-
-  reverse : FTerm -> FTerm
-  reverse (MkFT branches) = MkFT (reverse-br <$> branches)
-
    -- We use pattern matching on these 'ok' forms to lossily
    -- transform from Term to FTerm. Any pattern that isn't ok
    -- will throw an error. We use the same ok patterns
    -- to reconstruct a Term from a FTerm...
   pattern ok-pat-lam cs = pat-lam cs []
   pattern ok-clause tel inp term = clause tel (inp ∷ []) term
-  pattern ok-cons argpat rev-fn res-tel respat rest-term =
+  pattern ok-cons `A `B argpat rev-fn res-tel respat rest-term =
     def (quote _$|_|$_) (
-      harg _ ∷
-      harg _ ∷
+      harg `A ∷
+      harg `B ∷
       harg _ ∷
       varg argpat ∷
       varg rev-fn ∷
@@ -106,6 +97,17 @@ private
 
   module T-to-FT where
     private
+      pack-vars-pi-wrap : QContext -> Term -> Term -> TC Term
+      pack-vars-pi-wrap ctx `A `B = do
+        let vars = QC-to-VarSet ctx
+        `A <- pack-vars ctx vars `A
+        `B <- pack-vars ctx vars `B
+        return $ mk-fn-ty (def₂ (quote _<->_) `A `B) vars
+        where
+        mk-fn-ty : Type -> VarSet -> Type
+        mk-fn-ty = slist-foldr
+          (\ { nm rest -> pi (vArg unknown) (abs nm rest) })
+
       qc-extend : QContext -> List (String × Arg Type) -> QContext
       qc-extend = foldl \ ctx -> \ { (nm , varg _) -> ctx -, vv qone nm
                                    ; _             -> ctx -, hv
@@ -145,13 +147,14 @@ private
         typeError (strErr "Argument/output must be a variable or constructor" ∷ [])
 
       process-term : QContext -> Term -> TC (List FEqn × FPat)
-      process-term ctx (ok-cons argpat rev-fn res-tel respat rest-term) = do
+      process-term ctx (ok-cons `A `B argpat rev-fn res-tel respat rest-term) = do
         ctx , argpat <- Term-to-FPat ctx argpat
-        rev-fn <- pack-vars ctx rev-fn
+        `A<->`B <- pack-vars-pi-wrap ctx `A `B
+        vars , rev-fn <- pack-vars-lam-wrap ctx rev-fn
         let ctx = qc-extend ctx res-tel
         respat <- Pattern-to-FPat ctx respat
         eqns , outp <- process-term ctx rest-term
-        return $ (MkFEqn argpat rev-fn respat ∷ eqns) , outp
+        return $ (MkFEqn argpat (vars , rev-fn , `A<->`B) respat ∷ eqns) , outp
       process-term ctx t = do
         ctx , outp <- Term-to-FPat ctx t
          -- TODO: Check that all variables in ctx have been used
@@ -204,29 +207,17 @@ private
           ctx , ts <- helper ctx ps
           return (ctx , t ∷ ts)
 
-      mk-args : QContext -> TC (List Nat)
-      mk-args ctx = QC-to-VarSet ctx >>= remap-vars ctx
+      remap-vars : QContext -> VarSet -> TC (List Nat)
+      remap-vars ctx = helper []
         where
-        remap-vars : QContext -> VarSet -> TC (List Nat)
-        remap-vars ctx = helper []
-          where
-          helper : List Nat -> VarSet -> TC (List Nat)
-          helper done [] = return done
-          helper done (vars -, nm) = do
-            x <- QC-lookup ctx nm
-            helper (x ∷ done) vars
+        helper : List Nat -> VarSet -> TC (List Nat)
+        helper done [] = return done
+        helper done (vars -, nm) = do
+          x <- QC-lookup ctx nm
+          helper (x ∷ done) vars
 
       branch-length : FBranch -> Nat
       branch-length (branch _ eqns _) = length eqns
-
-      reverse-cumsum' : forall {n} -> Vec Nat n -> Vec Nat n
-      reverse-cumsum' []           = []
-      reverse-cumsum' (x ∷ [])     = 0 ∷ []
-      reverse-cumsum' (y ∷ x ∷ xs) = case reverse-cumsum' (x ∷ xs) of \ where
-        (sum ∷ rest) -> x + sum ∷ sum ∷ rest
-
-      reverse-cumsum : List Nat -> List Nat
-      reverse-cumsum = vecToList ∘ reverse-cumsum' ∘ listToVec
 
       FTerm-to-apply : FTerm -> TC Term
       FTerm-to-apply (MkFT bs) = return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
@@ -241,9 +232,9 @@ private
           where
           process-term : QContext -> List FEqn -> FPat -> TC Term
           process-term ctx [] outp = snd <$> FPat-to-Term ctx outp
-          process-term ctx (MkFEqn argp fn resp ∷ eqns) outp = do
+          process-term ctx (MkFEqn argp (vars , _) resp ∷ eqns) outp = do
             ctx , argp <- FPat-to-Term ctx argp
-            fn-args <- mk-args ctx
+            fn-args <- remap-vars ctx vars
             let fn = var (skip + slist-length ctx + length eqns) (map (varg ∘ var₀) fn-args)
             let ctx , res-tel = process-tel ctx resp
             respat <- varg <$> FPat-to-Pattern ctx resp
@@ -264,9 +255,9 @@ private
           where
           process-term : Nat -> QContext -> List FEqn -> FPat -> TC Term
           process-term _ ctx [] outp = snd <$> FPat-to-Term ctx outp
-          process-term i ctx (MkFEqn resp fn argp ∷ eqns) outp = do
+          process-term i ctx (MkFEqn resp (vars , _) argp ∷ eqns) outp = do
             ctx , argp <- FPat-to-Term ctx argp
-            fn-args <- mk-args ctx
+            fn-args <- remap-vars ctx vars
             let fn = var (skip + slist-length ctx + i) (map (varg ∘ var₀) fn-args)
             let ctx , res-tel = process-tel ctx resp
             respat <- varg <$> FPat-to-Pattern ctx resp
@@ -274,33 +265,18 @@ private
             return (reduced-cons argp (def (quote flip) (vArg fn ∷ [])) res-tel respat rest-term)
 
       get-fs : FTerm -> List Term
-      get-fs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ f _) -> f) eqns
+      get-fs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (_ , f , _) _) -> f) eqns
 
-      mk-ty : Type -> FTerm -> TC Type
-      mk-ty hole-ty =
-        (fmap (foldr (\ { fn-ty rest -> pi (vArg fn-ty) (abs "_" rest) })
-        hole-ty ∘ map mk-fn-ty)) ∘ get-names
-        where
-        get-names : FTerm -> TC (List (List String))
-        get-names (MkFT bs) = fmap concat (traverse process-branch bs)
-          where
-          process-branch : FBranch -> TC (List (List String))
-          process-branch (branch inp eqns outp) =
-            let ctx , _ = process-tel [] inp in process-eqns ctx eqns
-            where
-            process-eqns : QContext -> List FEqn -> TC (List (List String))
-            process-eqns ctx [] = return []
-            process-eqns ctx (MkFEqn argp fn resp ∷ eqns) = do
-              ctx , _ <- FPat-to-Term ctx argp
-              nms <- fmap slist-to-list $ QC-to-VarSet ctx
-              let ctx , _ = process-tel ctx resp
-              rest <- process-eqns ctx eqns
-              return (nms ∷ rest)
+      get-f-tys : FTerm -> List Type
+      get-f-tys (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (_ , _ , ty) _) -> ty) eqns
 
-        mk-fn-ty : List String -> Type
-        mk-fn-ty =
-          foldr (\ { nm rest -> pi (varg unknown) (abs nm rest) })
-          unknown
+      weaken-f-tys : List Type -> List Type
+      weaken-f-tys tys = map (uncurry weaken) (zip (from 0 for length tys) tys)
+
+      mk-ty : Type -> FTerm -> Type
+      mk-ty hole-ty ft =
+        foldr (\ { fn-ty rest -> pi (vArg fn-ty) (abs "_" rest) })
+        hole-ty (weaken-f-tys ∘ get-f-tys $ ft)
 
       mk-tel : Nat -> Telescope
       mk-tel n =
@@ -311,18 +287,21 @@ private
       mk-ps n = map (vArg ∘ var) (list-reverse (from 0 for n))
 
       num-eqns : FTerm -> Nat
-      num-eqns (MkFT bs) = sum (map branch-length bs)
-
+      num-eqns (MkFT bs) = sum $ map branch-length bs
 
       pattern Finner `apply `unapply = con (quote MkF) (varg `apply ∷ varg `unapply ∷ [])
-      pattern Fouter ty tel ps inner args = def (quote id) (hArg unknown ∷ hArg ty ∷ vArg (pat-lam (clause tel ps inner ∷ []) []) ∷ args)
+      pattern Fouter ty tel ps inner args =
+        def (quote id) (
+          hArg unknown ∷ hArg ty ∷
+          vArg (pat-lam (clause tel ps inner ∷ []) []) ∷ args)
 
     FT-to-Flippable : FTerm -> Type -> TC Term
     FT-to-Flippable ft hole-ty = do
       `apply <- FTerm-to-apply ft
       `unapply <- FTerm-to-unapply ft
       let fs = get-fs ft
-      ty <- mk-ty (weaken (length fs) hole-ty) ft 
+      let ty = mk-ty (weaken (length fs) hole-ty) ft 
+       -- typeError (termErr {!ty!} ∷ [])
       let `f = Finner `apply `unapply
       return (Fouter ty (mk-tel (num-eqns ft)) (mk-ps (num-eqns ft)) `f (map vArg fs))
      
@@ -385,7 +364,7 @@ F-tactic {A} {B} apply hole = do
   ft <- Term-to-FTerm `apply
   `hole-ty <- inferType hole
   `flippable <- FT-to-Flippable ft `hole-ty
-   -- typeError {!termErr `flippable ∷ []!}
+   -- typeError (termErr {!`flippable!} ∷ [])
   unify `flippable hole
 
 F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B
@@ -396,7 +375,6 @@ F {A} {B} _ {f} = f
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-{-
 private
   open import Numeric.Nat.DivMod
   open import Tactic.Nat
@@ -435,7 +413,7 @@ private
   natToFin = natToRange
   
   scale : forall d {{_ : NonZero d}} -> Nat × Fin d <-> Nat
-  scale d = MkF ap unap unap-ap ap-unap
+  scale d = MkF ap unap
     where
     ap : Nat × Fin d -> Nat
     ap (q , r [[ _ , _ ]]) = q * d + r
@@ -455,11 +433,36 @@ private
   Dist : forall {A : Set} -> Nat -> (A -> Nat) -> Set
   Dist d mass-fn = (∃ a , Fin (mass-fn a)) <-> Fin d
 
- -- encode : forall {A d} mass-fn {{_ : NonZero d}} {{_ : ∀ {a} -> NonZero (mass-fn a)}} -> Dist {A} d mass-fn -> Nat × A <-> Nat
- -- encode mass-fn dist = F \ { (n , a) -> n         $| flip (scale (mass-fn a)) |$ \ { (n , i) -> 
- --                                        (a , i)   $| dist                     |$ \ { i'      -> 
- --                                        (n , i')  $| scale _                  |$ \ { n       -> n } } } }
+{-
+encode : forall {A d} mass-fn {{_ : NonZero d}} {{_ : ∀ {a} -> NonZero (mass-fn a)}} -> Dist {A} d mass-fn -> Nat × A <-> Nat
+encode {A} {d} mass-fn dist = F \ { (n , a) -> n         $| flip (scale (mass-fn a)) |$ \ { (n , i) -> 
+                                               (a , i)   $| dist                     |$ \ { i'      -> 
+                                               (n , i')  $| scale d                  |$ \ { n       -> n } } } }
+-}
+ -- 
+ -- encode' : forall {A d} mass-fn {{_ : NonZero d}} {{_ : ∀ {a} -> NonZero (mass-fn a)}} -> Dist {A} d mass-fn -> Nat × A <-> Nat
+ -- encode' {A} {d} mass-fn dist =
+ --   id {A = (f0 : (a : _) -> Nat <-> Nat × Fin (mass-fn a)) (f1 : (n : _) -> _) (f2 : _) -> Nat × A <-> Nat}
+ --   (λ { f0 f1 f2
+ --          → MkF
+ --            (λ { (n , a)
+ --                   → n $| f0 a |$
+ --                     (λ { (n , i)
+ --                            → (a , i) $| f1 n |$ (λ { i' → (n , i') $| f2 |$ (λ { n → n }) })
+ --                        })
+ --               })
+ --            (λ { n → n $| flip f2 |$
+ --                     (λ { (n , i')
+ --                            → i' $| flip (f1 n) |$
+ --                              (λ { (a , i) → (n , i) $| flip (f0 a) |$ (λ { n → n , a }) })
+ --                        })
+ --               })
+ --      })
+ --   (λ { a → flip (scale (mass-fn a)) })
+ --   (λ { n → dist })
+ --   (λ { → scale d })
 
+{-
 encode' : forall {A d} mass-fn {{_ : NonZero d}} {{_ : ∀ {a} -> NonZero (mass-fn a)}} -> Dist {A} d mass-fn -> Nat × A <-> Nat
 encode' {A} {d} mass-fn dist =
   id {A = ((a : _) -> _) -> ((n : _) -> _) -> _ -> _}
@@ -545,26 +548,12 @@ _>>>R_ {A} {B} {C} f g = MkF (
     \ { a -> a $| f |$ \ { b ->
              b $| g |$ \ { c -> c }}}) a }}}
 infixr 2 _>>>R_
-
 -}
+
 idR : {A : Set} -> A <-> A
 idR = F \ { x -> x }
 
  -- Three different ways to compose two reversibles:
-_*R'_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
-_*R'_ {A} {B} {C} {D} f g = id {A = (f₁ : ∀ b → _) (f₂ : ∀ c → _) → A × B <-> C × D }
-  (λ { f0 f1
-         → MkF
-           (λ { (a , b)
-                  → a $| f0 b |$ (λ { c → b $| f1 c |$ (λ { d → c , d }) })
-              })
-           (λ { (c , d)
-                  → d $| flip (f1 c) |$
-                    (λ { b → c $| flip (f0 b) |$ (λ { a → a , b }) })
-              })
-     })
-  (λ { b → f }) (λ { c → g })
-
 _*R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
 f *R g = F \ { (a , b) → a $| f |$ \ { c
                        → b $| g |$ \ { d → (c , d) } } }
@@ -597,7 +586,6 @@ private
   uncurryR' : {A : Set} {B C : A -> Set} -> ((a : A) -> B a <-> C a) -> Σ A B <-> Σ A C
   uncurryR' f = F \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
 
-private
   data Al : Set where
     `a `b `c `d : Al
 
@@ -613,3 +601,11 @@ private
     \ { (left (m , n)) -> m $| idR |$ \ { m' ->
                           n $| idR |$ \ { n' -> right (n' , m') }}
       ; (right x)      ->                       left x })
+
+  test-dependent-types-in-context : {B C : Set} {A : B -> Set} -> (Σ B \ b -> (A b × C)) <-> (Σ B \ b -> (A b × C))
+  test-dependent-types-in-context = F \ { (b , a , c) → c $| idR |$ \ { c' -> (b , a , c') } }
+
+  test-dependent-pair : forall {A B C} -> ((b : B) -> A <-> C b) ->
+    (A × B) <-> Σ B C
+  test-dependent-pair f =
+    F \ { (a , b) -> a $| f b |$ \ { c -> (b , c) }}

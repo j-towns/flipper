@@ -11,7 +11,6 @@ open import Builtin.Reflection
 
 
 pattern default-modality = modality relevant quantity-ω
-pattern zero-modality = modality relevant quantity-0
 
  -- In various places varg is the only type of arg we support
 pattern varg x = arg (arg-info visible   default-modality) x
@@ -45,17 +44,45 @@ xs ++S (y ∷ ys) = (xs -, y) ++S ys
 list-to-slist : {A : Set} -> List A -> SnocList A
 list-to-slist = foldl _-,_ []
 
-slist-to-list : forall {A} -> SnocList A -> List A
-slist-to-list = go [] where
-  go : forall {A} -> List A -> SnocList A -> List A
-  go acc []        = acc
-  go acc (as -, a) = go (a ∷ acc) as
-
-slist-index : {A : Set} -> SnocList A -> Nat -> TC A
-slist-index []        _       = typeErrorS "List index error"
-slist-index (_  -, a) zero    = return a
+slist-index : {A : Set} -> SnocList A -> Nat -> Maybe A
+slist-index []        _       = nothing
+slist-index (_  -, a) zero    = just a
 slist-index (as -, _) (suc n) = slist-index as n
 
 slist-length : {A : Set} -> SnocList A -> Nat
 slist-length [] = zero
 slist-length (as -, _) = suc (slist-length as)
+
+slist-map : {A B : Set} -> (A -> B) -> SnocList A -> SnocList B
+slist-map f [] = []
+slist-map f (as -, a) = slist-map f as -, f a
+
+slist-foldl : {A B : Set} -> (B -> A -> B) -> B -> SnocList A -> B
+slist-foldl f b []        = b
+slist-foldl f b (as -, a) = f (slist-foldl f b as) a
+
+slist-foldr : {A B : Set} -> (A -> B -> B) -> B -> SnocList A -> B
+slist-foldr f b [] = b
+slist-foldr f b (as -, a) = slist-foldr f (f a b) as
+
+_++S'_ : forall {A} -> SnocList A -> SnocList A -> SnocList A
+_++S'_ = slist-foldl _-,_
+
+slist-to-list : forall {A} -> SnocList A -> List A
+slist-to-list = slist-foldr _∷_ []
+
+slist-concat : {A : Set} -> SnocList (SnocList A) -> SnocList A
+slist-concat = slist-foldl _++S'_ []
+
+slist-concatMap : {A B : Set} -> (A -> SnocList B) -> SnocList A -> SnocList B
+slist-concatMap f = slist-concat ∘ slist-map f
+
+private
+  reverse-cumsum' : forall {n} -> Vec Nat n -> Vec Nat n
+  reverse-cumsum' []           = []
+  reverse-cumsum' (_ ∷ [])     = 0 ∷ []
+  reverse-cumsum' (_ ∷ x ∷ xs) with reverse-cumsum' (x ∷ xs)
+  reverse-cumsum' (_ ∷ x ∷ xs) | (sum ∷ rest) = x + sum ∷ sum ∷ rest
+
+reverse-cumsum : List Nat -> List Nat
+reverse-cumsum = vecToList ∘ reverse-cumsum' ∘ listToVec

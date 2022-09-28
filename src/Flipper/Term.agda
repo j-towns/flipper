@@ -26,11 +26,13 @@ QContext : Set
 QContext = SnocList QVar
 
 QC-index : QContext -> Nat -> TC (String ⊎ One)
-QC-index []                   i       = typeErrorS "Invalid variable lookup." -- this should be unreachable
-QC-index (ctx -, vv qzero nm) zero    = typeErrorS $ "Reference to used variable " & nm & "."
-QC-index (ctx -, vv qone  nm) zero    = return (left nm)
-QC-index (ctx -, hv)          zero    = return (right <>)
-QC-index (ctx -, _)           (suc i) = QC-index ctx i
+QC-index ctx n with slist-index ctx n
+... | just (vv qzero nm) =
+  typeErrorS $ "Reference to used variable " & nm & "."
+... | just (vv qone  nm) = return $ left nm
+... | just hv            = return $ right <>
+... | nothing            =
+  typeErrorS "Internal Flipper error: invalid de Bruijn index."
 
 QC-use : QContext -> Nat -> TC (QContext × String)
 QC-use []                   i       = typeErrorS "Invalid variable lookup." -- this should be unreachable
@@ -54,44 +56,12 @@ QC-use' (ctx -, hv) v = QC-use' ctx v >>= \ (ctx , x) -> return ((ctx -, hv) , (
 QC-lookup : QContext -> String -> TC Nat
 QC-lookup ctx nm = fmap snd $ QC-use' ctx nm
 
- -- Based on https://github.com/UlfNorell/agda-prelude/blob/3d143d/src/Tactic/Reflection/Free.agda
- -- We use this to keep track of all the variables which are in scope
- -- in a Flippable.
-VarSet = SnocList String  -- ordered
+VarSet = SnocList String
 
- -- disjoint union (error on duplicate)
-_∪_ : VarSet → VarSet → TC VarSet
-[]        ∪ ys        = return ys
-xs        ∪ []        = return xs
-(xs -, x) ∪ (ys -, y) =
-  case-cmp compare x y
-    less    _ => return ∘ (_-, y) =<< (xs -, x) ∪ ys
-    equal   _ => typeErrorS
-      "Shadowed names are not allowed in Flippables."
-    greater _ => return ∘ (_-, x) =<< xs ∪ (ys -, y)
-
-_setminus_ : VarSet -> VarSet -> TC VarSet
-xs       setminus []         = return xs
-[]       setminus (_ -, _ )  = typeErrorS
-  "Subtracting non-empty from empty set"
-(xs -, x) setminus (ys -, y) = 
-  case-cmp compare x y
-    less    _ => typeErrorS
-      "Subtracted set not contained in left-hand-side."
-    equal   _ => xs setminus ys
-    greater _ => return ∘ (_-, x) =<< xs setminus (ys -, y)
-
-∅ : VarSet
-∅ = []
-
-QC-to-VarSet : QContext -> TC VarSet
-QC-to-VarSet [] = return []
-QC-to-VarSet (ctx -, vv qzero _) = QC-to-VarSet ctx
-QC-to-VarSet (ctx -, vv qone nm) = do
-  rest <- QC-to-VarSet ctx
-  all <- rest ∪ ([] -, nm)
-  return all 
-QC-to-VarSet (ctx -, hv)         = QC-to-VarSet ctx
+QC-to-VarSet : QContext -> VarSet
+QC-to-VarSet = slist-concatMap \ { (vv qzero _) → []
+                                 ; (vv qone nm) → [] -, nm
+                                 ; hv           → [] }
 
 VarSet-lookup : VarSet -> String -> TC Nat
 VarSet-lookup [] v = typeErrorS $ "Couldn't find name " & v & " in VarSet."
@@ -102,19 +72,12 @@ VarSet-lookup (ctx -, nm) v = if nm ==? v
 pattern packed-fn tel ps t = pat-lam (clause tel ps t ∷ []) []
 
 {-# TERMINATING #-}
-pack-vars' : QContext -> VarSet -> Term -> TC Term
-pack-vars' ctx vars t = do
-  t <- pack zero t
-  let vars-ls = slist-to-list vars
-  let num-vars = length vars-ls
-  return (packed-fn (zip vars-ls (replicate num-vars (vArg unknown)) ) (mk-ps num-vars) t)
+pack-vars : QContext -> VarSet -> Term -> TC Term
+pack-vars ctx vars = pack zero
   where
   ctx-len = slist-length ctx
   vars-len = slist-length vars
 
-  mk-ps : Nat -> List (Arg Pattern)
-  mk-ps n = map (vArg ∘ var) (reverse (from 0 for n))
-  
   pack-var : (depth : Nat) -> (x : Nat) -> TC (Nat ⊎ One)
   pack-var depth x with x <N depth
   pack-var depth x | false with x <N depth +N (slist-length ctx)
@@ -189,7 +152,15 @@ pack-vars' ctx vars t = do
     tel <- pack-tel (suc depth) tel
     return ((nm , arg i ty) ∷ tel)
 
-pack-vars : QContext -> Term -> TC Term
-pack-vars ctx t = do
-  vars <- QC-to-VarSet ctx
-  pack-vars' ctx vars t
+pack-vars-lam-wrap : QContext -> Term -> TC (VarSet × Term)
+pack-vars-lam-wrap ctx t = do
+  let vars = QC-to-VarSet ctx
+  t <- pack-vars ctx vars t
+  let vars-ls = slist-to-list vars
+  let num-vars = length vars-ls
+  return $ vars ,
+    (packed-fn (zip vars-ls (replicate num-vars (vArg unknown)))
+    (mk-ps num-vars) t)
+  where
+  mk-ps : Nat -> List (Arg Pattern)
+  mk-ps n = map (vArg ∘ var) (reverse (from 0 for n))
