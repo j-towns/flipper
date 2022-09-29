@@ -29,12 +29,12 @@ record _<->_ (A B : Set) : Set where
   field
     apply   : A -> B
     unapply : B -> A
-     -- unapplyApply : (a : A) -> unapply (apply a) ≡ a
-     -- applyUnapply : (b : B) -> apply (unapply b) ≡ b
+    unapplyApply : (a : A) -> unapply (apply a) ≡ a
+    applyUnapply : (b : B) -> apply (unapply b) ≡ b
 open _<->_ public
 
 flip : {A B : Set} -> (A <-> B) -> B <-> A
-flip (MkF apply unapply) = MkF unapply apply
+flip (MkF apply unapply ua au) = MkF unapply apply au ua
 
 _$|_|$_ : {A B C : Set} -> A -> (A <-> B) -> (B -> C) -> C
 a $| f |$ g = g (apply f a)
@@ -241,7 +241,6 @@ private
             rest-term <- process-term ctx eqns outp
             return (reduced-cons argp fn res-tel respat rest-term)
 
-       -- TODO: reduce duplicate code here...
       FTerm-to-unapply : FTerm -> TC Term
       FTerm-to-unapply (MkFT bs) = return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
         where
@@ -289,44 +288,58 @@ private
       num-eqns : FTerm -> Nat
       num-eqns (MkFT bs) = sum $ map branch-length bs
 
-      pattern Finner `apply `unapply = con (quote MkF) (varg `apply ∷ varg `unapply ∷ [])
+      pattern Finner `apply `unapply `ua `au =
+        con₄ (quote MkF) `apply `unapply `ua `au
       pattern Fouter ty tel ps inner args =
         def (quote id) (
           hArg unknown ∷ hArg ty ∷
           vArg (pat-lam (clause tel ps inner ∷ []) []) ∷ args)
 
-    FT-to-Flippable : FTerm -> Type -> TC Term
-    FT-to-Flippable ft hole-ty = do
-      `apply <- FTerm-to-apply ft
-      `unapply <- FTerm-to-unapply ft
-      let fs = get-fs ft
-      let ty = mk-ty (weaken (length fs) hole-ty) ft 
-       -- typeError (termErr {!ty!} ∷ [])
-      let `f = Finner `apply `unapply
-      return (Fouter ty (mk-tel (num-eqns ft)) (mk-ps (num-eqns ft)) `f (map vArg fs))
-     
+       -- Proof building
+      base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
+      base _ _ unapply b = refl
 
-     -- Proof building
+      _P|_|P_ : {A B C : Set} {rest : C -> A} {unapply-end : B -> A} -> (b : B)
+        -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
+        -> rest (apply f b) ≡ unapply-end b
+      b P| f |P cont with apply f b | unapplyApply f b
+      ... | c | refl = cont c
+
+      pattern proof-base `A `B `unapply outp =
+        def₄ (quote base) `A `B `unapply outp
+      pattern proof-cons argpat rev-fn res-tel respat rest-term =
+        def₃ (quote _P|_|P_) 
+          argpat
+          rev-fn
+          (ok-pat-lam (ok-clause res-tel respat rest-term ∷ []))
+
+      FTerm-to-ua : FTerm -> Type -> Type -> Term -> TC Term
+      FTerm-to-ua (MkFT bs) `A `B `unapply =
+        return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
+        where
+        branch-lengths = zip (reverse-cumsum (map branch-length bs)) bs
+        process-branch : Nat × FBranch -> TC Clause
+        process-branch (skip , (branch inp eqns outp)) = do
+          let ctx , tel = process-tel [] inp
+          inp <- FPat-to-Pattern ctx inp
+          term <- process-term ctx eqns outp
+          return (ok-clause tel (varg inp) term)
+          where
+          process-term : QContext -> List FEqn -> FPat -> TC Term
+          process-term ctx [] outp = do
+            outp <- snd <$> FPat-to-Term ctx outp
+            let weaken = weaken (slist-length ctx)
+            return (proof-base (weaken `A) (weaken `B) (weaken `unapply) outp)
+          process-term ctx (MkFEqn argp (vars , _) resp ∷ eqns) outp = do
+            ctx , argp <- FPat-to-Term ctx argp
+            fn-args <- remap-vars ctx vars
+            let fn = var (skip + slist-length ctx + length eqns) (map (varg ∘ var₀) fn-args)
+            let ctx , res-tel = process-tel ctx resp
+            respat <- varg <$> FPat-to-Pattern ctx resp
+            rest-term <- process-term ctx eqns outp
+            return (proof-cons argp fn res-tel respat rest-term)
+
     {-
-    base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
-    base _ _ unapply b = refl
-
-    _P|_|P_ : {A B C : Set} {rest : C -> A} {unapply-end : B -> A} -> (b : B)
-      -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
-      -> rest (apply f b) ≡ unapply-end b
-    b P| f |P cont with apply f b | unapplyApply f b
-    ... | c | refl = cont c
-    -}
-
-    {-
-    pattern proof-base `A `B `unapply outp =
-      def (quote base) (vArg `A ∷ vArg `B ∷ varg `unapply ∷ varg outp ∷ [])
-    pattern proof-cons argpat rev-fn res-tel respat rest-term =
-      def (quote _P|_|P_) (
-        varg argpat ∷
-        varg rev-fn ∷
-        varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
-
      -- To construct a proof from a reversible apply function, we
      -- replace _$|_|$_ with _P|_|P_, and the reversible pattern at
      -- the end of apply with base.
@@ -354,6 +367,17 @@ private
         term <- process-term ctx eqns outp
         return (ok-clause tel inp term)
     -}
+    FT-to-Flippable : Type -> Type -> FTerm -> Type -> TC Term
+    FT-to-Flippable `A `B ft hole-ty = do
+      `apply <- FTerm-to-apply ft
+      `unapply <- FTerm-to-unapply ft
+      let fs = get-fs ft
+      let ty = mk-ty (weaken (length fs) hole-ty) ft 
+      let `A = weaken (length fs) `A
+      let `B = weaken (length fs) `B
+      `ua <- FTerm-to-ua ft `A `B `unapply
+      let `f = Finner `apply `unapply `ua unknown
+      return (Fouter ty (mk-tel (num-eqns ft)) (mk-ps (num-eqns ft)) `f (map vArg fs))
   open FT-to-T
 
 F-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
@@ -363,7 +387,7 @@ F-tactic {A} {B} apply hole = do
   `apply <- quoteTC apply
   ft <- Term-to-FTerm `apply
   `hole-ty <- inferType hole
-  `flippable <- FT-to-Flippable ft `hole-ty
+  `flippable <- FT-to-Flippable `A `B ft `hole-ty
    -- typeError (termErr {!`flippable!} ∷ [])
   unify `flippable hole
 
@@ -413,7 +437,7 @@ private
   natToFin = natToRange
   
   scale : forall d {{_ : NonZero d}} -> Nat × Fin d <-> Nat
-  scale d = MkF ap unap
+  scale d = MkF ap unap unap-ap ap-unap
     where
     ap : Nat × Fin d -> Nat
     ap (q , r [[ _ , _ ]]) = q * d + r
@@ -550,6 +574,7 @@ _>>>R_ {A} {B} {C} f g = MkF (
 infixr 2 _>>>R_
 -}
 
+{-
 idR : {A : Set} -> A <-> A
 idR = F \ { x -> x }
 
@@ -609,3 +634,4 @@ private
     (A × B) <-> Σ B C
   test-dependent-pair f =
     F \ { (a , b) -> a $| f b |$ \ { c -> (b , c) }}
+-}
