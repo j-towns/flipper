@@ -108,20 +108,20 @@ private
           (\ { nm rest -> pi (vArg unknown) (abs nm rest) })
 
       qc-extend : QContext -> List (String × Arg Type) -> QContext
-      qc-extend = foldl \ ctx -> \ { (nm , varg _) -> ctx -, vv qone nm
-                                   ; _             -> ctx -, hv
-                                   }
+      qc-extend = foldl \ { ctx (nm , varg _) -> ctx -, vv qone nm
+                          ; ctx _             -> ctx -, hv
+                          }
 
       {-# TERMINATING #-}
       Pattern-to-FPat : QContext -> Arg Pattern -> TC FPat
-      Pattern-to-FPat ctx (varg (var x)) = do
+      Pattern-to-FPat ctx (vArg (var x)) = do
         left nm <- QC-index ctx x
           where right <> -> typeErrorS "Reference to hidden variable in pattern."
         return $ var nm
-      Pattern-to-FPat ctx (varg (con c ps)) = do
+      Pattern-to-FPat ctx (vArg (con c ps)) = do
         ps <- traverse (Pattern-to-FPat ctx) (filter isVisible ps)
         return $ con c ps
-      Pattern-to-FPat _   (varg p) = typeError
+      Pattern-to-FPat _   (vArg p) = typeError
         (strErr "Patterns must either be variables or constructors, got "
         ∷ pattErr p ∷ [])
       Pattern-to-FPat _   _        = typeErrorS "Non-visible pattern."
@@ -364,34 +364,6 @@ private
             rest-term <- process-term (suc i) ctx eqns outp
             return (proof-cons argp (def (quote flip) (vArg fn ∷ [])) res-tel respat rest-term)
 
-    {-
-     -- To construct a proof from a reversible apply function, we
-     -- replace _$|_|$_ with _P|_|P_, and the reversible pattern at
-     -- the end of apply with base.
-    FT-to-proof : (apply : FTerm) (`A `B `unapply : Term) -> TC Term
-    FT-to-proof (MkFT bs) `A `B `unapply =
-      return ∘ ok-pat-lam =<< traverse process-branch bs
-      where
-      process-term : Context -> List FEqn -> FPat -> TC Term
-      process-term ctx [] outp = do
-        outp <- FPat-to-Term ctx outp
-        let weaken = weaken (slist-length ctx)
-        return (proof-base (weaken `A) (weaken `B) (weaken `unapply) outp)
-      process-term ctx (MkFEqn argp fn resp ∷ eqns) outp = do
-        argp <- FPat-to-Term ctx argp
-        fn <- {!!} ctx fn
-        let ctx , res-tel = process-tel ctx resp
-        respat <- fmap varg $ FPat-to-Pattern ctx resp
-        rest-term <- process-term ctx eqns outp
-        return (proof-cons argp fn res-tel respat rest-term)
-
-      process-branch : FBranch -> TC Clause
-      process-branch (branch inp eqns outp) = do
-        let ctx , tel = process-tel [] inp
-        inp <- fmap varg $ FPat-to-Pattern ctx inp
-        term <- process-term ctx eqns outp
-        return (ok-clause tel inp term)
-    -}
     FT-to-Flippable : Type -> Type -> FTerm -> Type -> TC Term
     FT-to-Flippable `A `B ft hole-ty = do
       `apply <- FTerm-to-apply ft
@@ -414,7 +386,6 @@ F-tactic {A} {B} apply hole = do
   ft <- Term-to-FTerm `apply
   `hole-ty <- inferType hole
   `flippable <- FT-to-Flippable `A `B ft `hole-ty
-   -- typeError (termErr {!`flippable!} ∷ [])
   unify `flippable hole
 
 F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B
@@ -425,181 +396,6 @@ F {A} {B} _ {f} = f
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-private
-  open import Numeric.Nat.DivMod
-  open import Tactic.Nat
-  
-  
-  record Range (a b : Nat) : Set where
-    constructor _[[_,_]]
-    field
-      n   : Nat
-      a≤n : a ≤ n
-      n<b : n < b
-  
-  natToRange : forall {a b} n {{_ : IsTrue (a <? suc n && n <? b)}}
-    -> Range a b
-  natToRange {a} {b} n with compare a (suc n) | compare n b
-  ... | less a≤n | less n<b = n [[ a≤n , n<b ]]
-  
-  instance
-    NumberRange : forall {a b} -> Number (Range a b)
-    Number.Constraint (NumberRange {a} {b}) n = IsTrue (a <? suc n && n <? b)
-    fromNat {{NumberRange}} = natToRange
-  
-    ShowRange : forall {a b} -> Show (Range a b)
-    ShowRange = simpleShowInstance \ (n [[ _ , _ ]]) -> show n 
-  
-  cong-Range : forall {a b} {m n : Range a b}
-    -> Range.n m ≡ Range.n n -> m ≡ n
-  cong-Range {m = m [[ a≤m , m<b ]]} {n = n [[ a≤n , n<b ]]} m≡n
-    rewrite m≡n | smashed {x = a≤m} {y = a≤n}
-      | smashed {x = m<b} {y = n<b} = refl
-  
-  Fin : Nat -> Set
-  Fin d = Range 0 d
-  
-  natToFin : forall {d} n {{_ : IsTrue (n <? d)}} -> Fin d
-  natToFin = natToRange
-  
-  scale : forall d {{_ : NonZero d}} -> Nat × Fin d <-> Nat
-  scale d = MkF ap unap unap-ap ap-unap
-    where
-    ap : Nat × Fin d -> Nat
-    ap (q , r [[ _ , _ ]]) = q * d + r
-  
-    unap : Nat -> Nat × Fin d
-    unap n with n divmod d
-    unap n | dm = quot dm , (rem dm [[ auto , rem-less dm ]])
-  
-    unap-ap : (qr : Nat × Fin d) -> unap (ap qr) ≡ qr
-    unap-ap (q , (r [[ _ , r<d ]])) with ((q * d + r) divmod d)
-    ... | dm with divmod-unique dm (qr q r r<d refl)
-    ...   | q'=q , r'=r = cong₂ _,_ q'=q (cong-Range r'=r)
-  
-    ap-unap : (n : Nat) -> ap (unap n) ≡ n
-    ap-unap n = quot-rem-sound (n divmod d)
-  
-  Dist : forall {A : Set} -> Nat -> (A -> Nat) -> Set
-  Dist d mass-fn = (∃ a , Fin (mass-fn a)) <-> Fin d
-
-{-
-encode : forall {A d} mass-fn {{_ : NonZero d}} {{_ : ∀ {a} -> NonZero (mass-fn a)}} -> Dist {A} d mass-fn -> Nat × A <-> Nat
-encode {A} {d} mass-fn dist = F \ { (n , a) -> n         $| flip (scale (mass-fn a)) |$ \ { (n , i) -> 
-                                               (a , i)   $| dist                     |$ \ { i'      -> 
-                                               (n , i')  $| scale d                  |$ \ { n       -> n } } } }
--}
- -- 
- -- encode' : forall {A d} mass-fn {{_ : NonZero d}} {{_ : ∀ {a} -> NonZero (mass-fn a)}} -> Dist {A} d mass-fn -> Nat × A <-> Nat
- -- encode' {A} {d} mass-fn dist =
- --   id {A = (f0 : (a : _) -> Nat <-> Nat × Fin (mass-fn a)) (f1 : (n : _) -> _) (f2 : _) -> Nat × A <-> Nat}
- --   (λ { f0 f1 f2
- --          → MkF
- --            (λ { (n , a)
- --                   → n $| f0 a |$
- --                     (λ { (n , i)
- --                            → (a , i) $| f1 n |$ (λ { i' → (n , i') $| f2 |$ (λ { n → n }) })
- --                        })
- --               })
- --            (λ { n → n $| flip f2 |$
- --                     (λ { (n , i')
- --                            → i' $| flip (f1 n) |$
- --                              (λ { (a , i) → (n , i) $| flip (f0 a) |$ (λ { n → n , a }) })
- --                        })
- --               })
- --      })
- --   (λ { a → flip (scale (mass-fn a)) })
- --   (λ { n → dist })
- --   (λ { → scale d })
-
-{-
-encode' : forall {A d} mass-fn {{_ : NonZero d}} {{_ : ∀ {a} -> NonZero (mass-fn a)}} -> Dist {A} d mass-fn -> Nat × A <-> Nat
-encode' {A} {d} mass-fn dist =
-  id {A = ((a : _) -> _) -> ((n : _) -> _) -> _ -> _}
-      (\ { f1 f2 f3 -> MkF (\ { (n , a) -> n        $| f1 a |$ \ { (n , i) -> 
-                                           (a , i)  $| f2 n |$ \ { i'      -> 
-                                           (n , i') $| f3   |$ \ { n       -> n } } } })
-
-                     (\ { n -> n       $| flip f3     |$ \ { (n , i') -> 
-                               i'      $| flip (f2 n) |$ \ { (a , i)  -> 
-                               (n , i) $| flip (f1 a) |$ \ { n        -> (n , a) } } } })
-
-                     (\ { (n , a)  -> n        P| f1 a |P \ { (n , i) -> 
-                                      (a , i)  P| f2 n |P \ { i'      -> 
-                                      (n , i') P| f3   |P \ { n -> base _ _ ( \ { n -> n       $| flip f3     |$ \ { (n , i') -> 
-                                                                                       i'      $| flip (f2 n) |$ \ { (a , i)  -> 
-                                                                                       (n , i) $| flip (f1 a) |$ \ { n        -> (n , a) } } } }) n } } } })
-                     {!!}}) (\ { a -> flip (scale (mass-fn a))})
-                            (\ { n -> dist })
-                            (scale _)
--}
-{-
-  apply
-  (flip
-   (flip
-    (scale
-     (mass-fn
-      (fst (apply (flip dist) (snd (apply (flip (scale d)) n))))))))
-  (fst (apply (flip (scale d)) n) ,
-   snd (apply (flip dist) (snd (apply (flip (scale d)) n))))
-  , fst (apply (flip dist) (snd (apply (flip (scale d)) n)))
-    = _unapply-end_1694 (unapply (scale d) n)
-    : Σ Nat (λ _ → A)
-
-    (blocked on _unapply-end_1694)
-
-
-  _unapply-end_1694 (n₁ , i') = _unapply-end_1679 (unapply dist i')
-    : Σ Nat (λ _ → A)
-
-    (blocked on any(_unapply-end_1679, _unapply-end_1694))
-
-
-  _unapply-end_1679 (a , i)
-    = _unapply-end_1664 (unapply (flip (scale (mass-fn a))) (n₁ , i))
-    : Σ Nat (λ _ → A)
-
-    (blocked on any(_unapply-end_1664, _unapply-end_1679))
-
-
-  _unapply-end_1664 n = n , a : Σ Nat (λ _ → A)
-
-    (blocked on _unapply-end_1664)
--}
-
-{-
-interweave : forall {A B C} -> (f : C -> A <-> A × B) -> (g : C × B <-> B) -> (h : A × B <-> A) -> A × C <-> A
-interweave f g h = MkF
-  (\ { (n , a) -> n        $| f a |$ \ { (n , i) -> 
-                  (a , i)  $| g   |$ \ { i'      -> 
-                  (n , i') $| h   |$ \ { n       -> n } } } })
-  ( \ { n -> n       $| flip h     |$ \ { (n , i') -> 
-             i'      $| flip g     |$ \ { (a , i)  -> 
-             (n , i) $| flip (f a) |$ \ { n        -> (n , a) } } } })
-  (\ { (n , a)  -> _P|_|P_ n        (f a) \ { (n , i) -> 
-                   _P|_|P_ (a , i)  g     \ { i' -> 
-                   _P|_|P_ (n , i') h     \ { n -> base (Nat × A) Nat {!!} n } } } })
-  {!!}
-----------------------------------------------------------------------
--}
-
-{-
-_>>>R_ {A} {B} {C} f g = MkF (
-  \ { a -> a $| f |$ \ { b ->
-           b $| g |$ \ { c -> c }}}) (
-  \ { c -> c $| flip g |$ \ { b ->
-           b $| flip f |$ \ { a -> a }}}) (
-  \ { a -> _P|_|P_ {unapply-end = \ a -> a} a f \ { b ->
-           _P|_|P_ {unapply-end = _} b g \ { c -> base A C (
-    \ { c -> c $| flip g |$ \ { b ->
-             b $| flip f |$ \ { a -> a }}}) c }}})
-  \ { c -> c P| flip g |P \ { b ->
-           b P| flip f |P \ { a -> base
-    \ { a -> a $| f |$ \ { b ->
-             b $| g |$ \ { c -> c }}}) a }}}
-infixr 2 _>>>R_
--}
-
 idR : {A : Set} -> A <-> A
 idR = F \ { x -> x }
 
