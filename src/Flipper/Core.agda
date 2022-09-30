@@ -1,7 +1,6 @@
 module Flipper.Core where
 
-open import Prelude renaming (reverse to list-reverse)
-  hiding (abs; flip; Fin; natToFin)
+open import Prelude hiding (abs; flip; Fin; natToFin)
 open import Container.Traversable
 open import Tactic.Reflection hiding (VarSet)
 open import Tactic.Reflection.DeBruijn
@@ -249,7 +248,7 @@ private
         process-branch (skip , (branch inp eqns outp)) = do
           let ctx , tel = process-tel [] outp
           outp <- FPat-to-Pattern ctx outp
-          term <- process-term 0 ctx (list-reverse eqns) inp
+          term <- process-term 0 ctx (reverse eqns) inp
           return (ok-clause tel (varg outp) term)
           where
           process-term : Nat -> QContext -> List FEqn -> FPat -> TC Term
@@ -283,7 +282,7 @@ private
           (replicate n (vArg unknown))
 
       mk-ps : Nat -> List (Arg Pattern)
-      mk-ps n = map (vArg ∘ var) (list-reverse (from 0 for n))
+      mk-ps n = map (vArg ∘ var) (reverse (from 0 for n))
 
       num-eqns : FTerm -> Nat
       num-eqns (MkFT bs) = sum $ map branch-length bs
@@ -339,6 +338,32 @@ private
             rest-term <- process-term ctx eqns outp
             return (proof-cons argp fn res-tel respat rest-term)
 
+      FTerm-to-au : FTerm -> Type -> Type -> Term -> TC Term
+      FTerm-to-au (MkFT bs) `A `B `apply =
+        return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
+        where
+        branch-lengths = zip (reverse-cumsum (map branch-length bs)) bs
+        process-branch : Nat × FBranch -> TC Clause
+        process-branch (skip , (branch inp eqns outp)) = do
+          let ctx , tel = process-tel [] outp
+          outp <- FPat-to-Pattern ctx outp
+          term <- process-term 0 ctx (reverse eqns) inp
+          return (ok-clause tel (varg outp) term)
+          where
+          process-term : Nat -> QContext -> List FEqn -> FPat -> TC Term
+          process-term _ ctx [] outp = do
+            outp <- snd <$> FPat-to-Term ctx outp
+            let weaken = weaken (slist-length ctx)
+            return (proof-base (weaken `B) (weaken `A) (weaken `apply) outp)
+          process-term i ctx (MkFEqn resp (vars , _) argp ∷ eqns) outp = do
+            ctx , argp <- FPat-to-Term ctx argp
+            fn-args <- remap-vars ctx vars
+            let fn = var (skip + slist-length ctx + i) (map (varg ∘ var₀) fn-args)
+            let ctx , res-tel = process-tel ctx resp
+            respat <- varg <$> FPat-to-Pattern ctx resp
+            rest-term <- process-term (suc i) ctx eqns outp
+            return (proof-cons argp (def (quote flip) (vArg fn ∷ [])) res-tel respat rest-term)
+
     {-
      -- To construct a proof from a reversible apply function, we
      -- replace _$|_|$_ with _P|_|P_, and the reversible pattern at
@@ -376,7 +401,8 @@ private
       let `A = weaken (length fs) `A
       let `B = weaken (length fs) `B
       `ua <- FTerm-to-ua ft `A `B `unapply
-      let `f = Finner `apply `unapply `ua unknown
+      `au <- FTerm-to-au ft `A `B `apply
+      let `f = Finner `apply `unapply `ua `au
       return (Fouter ty (mk-tel (num-eqns ft)) (mk-ps (num-eqns ft)) `f (map vArg fs))
   open FT-to-T
 
@@ -574,7 +600,6 @@ _>>>R_ {A} {B} {C} f g = MkF (
 infixr 2 _>>>R_
 -}
 
-{-
 idR : {A : Set} -> A <-> A
 idR = F \ { x -> x }
 
@@ -634,4 +659,3 @@ private
     (A × B) <-> Σ B C
   test-dependent-pair f =
     F \ { (a , b) -> a $| f b |$ \ { c -> (b , c) }}
--}
