@@ -175,14 +175,14 @@ private
         (absurd-clause _ _) -> false
         _                   -> true
     Term-to-FTerm (meta m args) = blockOnMeta m
-    Term-to-FTerm t = typeError (strErr "Only pattern-lambda terms can be reversed." ∷ [])
+    Term-to-FTerm t = typeErrorS "Only pattern-lambda terms can be reversed."
   open T-to-FT
 
   module FT-to-T where
     private
       process-tel : QContext -> FPat -> QContext × List (String × Arg Type)
       process-tel ctx p = let flat = flatten p in
-        (ctx ++S map (vv qone) flat) , map (_, varg unknown) flat
+        ctx ++S map (vv qone) flat , map (_, varg unknown) flat
         
       {-# TERMINATING #-}
       FPat-to-Pattern : QContext -> FPat -> TC Pattern

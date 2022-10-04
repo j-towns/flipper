@@ -61,10 +61,12 @@ VarSet = SnocList String
 QC-to-VarSet : QContext -> VarSet
 QC-to-VarSet = slist-concatMap \ { (vv qzero _) → []
                                  ; (vv qone nm) → [] -, nm
-                                 ; hv           → [] }
+                                 ; hv           → []
+                                 }
 
 VarSet-lookup : VarSet -> String -> TC Nat
-VarSet-lookup [] v = typeErrorS $ "Couldn't find name " & v & " in VarSet."
+VarSet-lookup []          v =
+  typeErrorS $ "Couldn't find name " & v & " in VarSet."
 VarSet-lookup (ctx -, nm) v = if nm ==? v
   then return zero
   else return ∘ suc =<< (VarSet-lookup ctx v)
