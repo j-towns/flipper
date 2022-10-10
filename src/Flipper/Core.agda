@@ -1,6 +1,6 @@
 module Flipper.Core where
 
-open import Prelude hiding (abs; flip; Fin; natToFin)
+open import Prelude hiding (abs; flip)
 open import Container.Traversable
 open import Tactic.Reflection hiding (VarSet)
 open import Tactic.Reflection.DeBruijn
@@ -396,26 +396,30 @@ F {A} {B} _ {f} = f
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-idR : {A : Set} -> A <-> A
-idR = F \ { x -> x }
+idF : {A : Set} -> A <-> A
+idF = F \ { x -> x }
 
- -- Three different ways to compose two reversibles:
-_*R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
-f *R g = F \ { (a , b) → a $| f |$ \ { c
+ -- Three different ways to compose two flippables:
+_*F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
+f *F g = F \ { (a , b) → a $| f |$ \ { c
                        → b $| g |$ \ { d → (c , d) } } }
 
-_+R_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
-f +R g = F (\ { (left  a) → a $| f |$ \ { c -> left  c }
+_+F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
+f +F g = F (\ { (left  a) → a $| f |$ \ { c -> left  c }
               ; (right b) → b $| g |$ \ { d -> right d } })
 
-_>>>R_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
-f >>>R g = F
+_<>F_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
+f <>F g = F
   \ { a -> a $| f |$ \ { b ->
            b $| g |$ \ { c -> c }}}
-infixl 2 _>>>R_
+infixl 2 _<>F_
 
-R≡ : {A B : Set} -> A ≡ B -> A <-> B
-R≡ refl = F (\ { x -> x})
+composeF : forall {A C} B -> (A <-> B) -> (B <-> C) -> A <-> C
+composeF _ f g = f <>F g
+syntax composeF B f g = f < B >F g 
+
+F≡ : {A B : Set} -> A ≡ B -> A <-> B
+F≡ refl = F (\ { x -> x})
 
 private
   pair-swp : {A B : Set} -> A × B <-> B × A
@@ -425,31 +429,31 @@ private
   sum-swp = F (\ { (left a)  → right a
                  ; (right b) → left b })
 
-  uncurryR : {A B C : Set} -> (A -> B <-> C) -> A × B <-> A × C
-  uncurryR f = F (\ {
+  uncurryF : {A B C : Set} -> (A -> B <-> C) -> A × B <-> A × C
+  uncurryF f = F (\ {
     (a , b) -> b $| f a |$ \ { c -> (a , c) }})
 
-  uncurryR' : {A : Set} {B C : A -> Set} -> ((a : A) -> B a <-> C a) -> Σ A B <-> Σ A C
-  uncurryR' f = F \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
+  uncurryF' : {A : Set} {B C : A -> Set} -> ((a : A) -> B a <-> C a) -> Σ A B <-> Σ A C
+  uncurryF' f = F \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
 
   data Al : Set where
     `a `b `c `d : Al
 
   test-nested-sum : Either (Either Nat Nat) (Either Nat Nat) <-> Al × Nat
   test-nested-sum = F (\
-    { (left  (left  x)) → x $| flip idR |$ \ { x -> `a , x }
+    { (left  (left  x)) → x $| flip idF |$ \ { x -> `a , x }
     ; (left  (right x)) → `b , x
     ; (right (left  x)) → `c , x
     ; (right (right x)) → `d , x })
 
   test-composed : Either (Nat × Nat) Nat <-> Either Nat (Nat × Nat)
   test-composed = F (
-    \ { (left (m , n)) -> m $| idR |$ \ { m' ->
-                          n $| idR |$ \ { n' -> right (n' , m') }}
+    \ { (left (m , n)) -> m $| idF |$ \ { m' ->
+                          n $| idF |$ \ { n' -> right (n' , m') }}
       ; (right x)      ->                       left x })
 
   test-dependent-types-in-context : {B C : Set} {A : B -> Set} -> (Σ B \ b -> (A b × C)) <-> (Σ B \ b -> (A b × C))
-  test-dependent-types-in-context = F \ { (b , a , c) → c $| idR |$ \ { c' -> (b , a , c') } }
+  test-dependent-types-in-context = F \ { (b , a , c) → c $| idF |$ \ { c' -> (b , a , c') } }
 
   test-dependent-pair : forall {A B C} -> ((b : B) -> A <-> C b) ->
     (A × B) <-> Σ B C
