@@ -287,23 +287,25 @@ private
       num-eqns : FTerm -> Nat
       num-eqns (MkFT bs) = sum $ map branch-length bs
 
-      pattern Finner `apply `unapply `ua `au =
-        con₄ (quote MkF) `apply `unapply `ua `au
+      pattern Finner `A `B `apply `unapply `ua `au =
+        con (quote MkF) (hArg `A ∷ hArg `B ∷ vArg `apply ∷
+          vArg `unapply ∷ vArg `ua ∷ vArg `au ∷ [])
       pattern Fouter ty tel ps inner args =
         def (quote id) (
           hArg unknown ∷ hArg ty ∷
           vArg (pat-lam (clause tel ps inner ∷ []) []) ∷ args)
 
-       -- Proof building
-      base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
-      base _ _ unapply b = refl
+     -- Proof building
+    base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
+    base _ _ unapply b = refl
 
-      _P|_|P_ : {A B C : Set} {rest : C -> A} {unapply-end : B -> A} -> (b : B)
-        -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
-        -> rest (apply f b) ≡ unapply-end b
-      b P| f |P cont with apply f b | unapplyApply f b
-      ... | c | refl = cont c
+    _P|_|P_ : {A B C : Set} {rest : C -> A} {unapply-end : B -> A} -> (b : B)
+      -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
+      -> rest (apply f b) ≡ unapply-end b
+    b P| f |P cont with apply f b | unapplyApply f b
+    ... | c | refl = cont c
 
+    private
       pattern proof-base `A `B `unapply outp =
         def₄ (quote base) `A `B `unapply outp
       pattern proof-cons argpat rev-fn res-tel respat rest-term =
@@ -374,9 +376,187 @@ private
       let `B = weaken (length fs) `B
       `ua <- FTerm-to-ua ft `A `B `unapply
       `au <- FTerm-to-au ft `A `B `apply
-      let `f = Finner `apply `unapply `ua `au
+      let `f = Finner `A `B `apply `unapply `ua `au
       return (Fouter ty (mk-tel (num-eqns ft)) (mk-ps (num-eqns ft)) `f (map vArg fs))
   open FT-to-T
+
+scratch : Term
+scratch = def (quote id)
+ (arg (arg-info hidden (modality relevant quantity-ω)) unknown ∷
+ arg (arg-info hidden (modality relevant quantity-ω))
+ (def (quote _<->_)
+  (arg (arg-info visible (modality relevant quantity-ω))
+   (def (quote Nat) [])
+   ∷
+   arg (arg-info visible (modality relevant quantity-ω))
+   (def (quote Either)
+    (arg (arg-info hidden (modality relevant quantity-ω))
+     (def (quote lzero) [])
+     ∷
+     arg (arg-info hidden (modality relevant quantity-ω))
+     (def (quote lzero) [])
+     ∷
+     arg (arg-info visible (modality relevant quantity-ω))
+     (def (quote ⊥) [])
+     ∷
+     arg (arg-info visible (modality relevant quantity-ω))
+     (def (quote Nat) [])
+     ∷ []))
+   ∷ []))
+ ∷
+ arg (arg-info visible (modality relevant quantity-ω))
+ (pat-lam
+  (clause [] []
+   (con (quote MkF)
+    (arg (arg-info hidden (modality relevant quantity-ω))
+     (def (quote Nat) [])
+     ∷
+     arg (arg-info hidden (modality relevant quantity-ω))
+     (def (quote Either)
+      (arg (arg-info hidden (modality relevant quantity-ω))
+       (def (quote lzero) [])
+       ∷
+       arg (arg-info hidden (modality relevant quantity-ω))
+       (def (quote lzero) [])
+       ∷
+       arg (arg-info visible (modality relevant quantity-ω))
+       (def (quote ⊥) [])
+       ∷
+       arg (arg-info visible (modality relevant quantity-ω))
+       (def (quote Nat) [])
+       ∷ []))
+     ∷
+     arg (arg-info visible (modality relevant quantity-ω))
+     (pat-lam
+      (clause
+       (("x" ,
+         arg (arg-info visible (modality relevant quantity-ω)) unknown)
+        ∷ [])
+       (arg (arg-info visible (modality relevant quantity-ω)) (var 0) ∷
+        [])
+       (con (quote right)
+        (arg (arg-info visible (modality relevant quantity-ω)) (var 0 []) ∷
+         []))
+       ∷ [])
+      [])
+     ∷
+     arg (arg-info visible (modality relevant quantity-ω))
+     (pat-lam
+      (clause
+       (("x" ,
+         arg (arg-info visible (modality relevant quantity-ω)) unknown)
+        ∷ [])
+       (arg (arg-info visible (modality relevant quantity-ω))
+        (con (quote right)
+         (arg (arg-info visible (modality relevant quantity-ω)) (var 0) ∷
+          []))
+        ∷ [])
+       (var 0 [])
+       ∷ [])
+      [])
+     ∷
+     arg (arg-info visible (modality relevant quantity-ω))
+     (pat-lam
+      (clause
+       (("x" ,
+         arg (arg-info visible (modality relevant quantity-ω)) unknown)
+        ∷ [])
+       (arg (arg-info visible (modality relevant quantity-ω)) (var 0) ∷
+        [])
+       (def (quote FT-to-T.base)
+        (arg (arg-info visible (modality relevant quantity-ω))
+         (def (quote Nat) [])
+         ∷
+         arg (arg-info visible (modality relevant quantity-ω))
+         (def (quote Either)
+          (arg (arg-info hidden (modality relevant quantity-ω))
+           (def (quote lzero) [])
+           ∷
+           arg (arg-info hidden (modality relevant quantity-ω))
+           (def (quote lzero) [])
+           ∷
+           arg (arg-info visible (modality relevant quantity-ω))
+           (def (quote ⊥) [])
+           ∷
+           arg (arg-info visible (modality relevant quantity-ω))
+           (def (quote Nat) [])
+           ∷ []))
+         ∷
+         arg (arg-info visible (modality relevant quantity-ω))
+         (pat-lam
+          (clause
+           (("x" ,
+             arg (arg-info visible (modality relevant quantity-ω)) unknown)
+            ∷ [])
+           (arg (arg-info visible (modality relevant quantity-ω))
+            (con (quote right)
+             (arg (arg-info visible (modality relevant quantity-ω)) (var 0) ∷
+              []))
+            ∷ [])
+           (var 0 [])
+           ∷ [])
+          [])
+         ∷
+         arg (arg-info visible (modality relevant quantity-ω))
+         (con (quote right)
+          (arg (arg-info visible (modality relevant quantity-ω)) (var 0 []) ∷
+           []))
+         ∷ []))
+       ∷ [])
+      [])
+     ∷
+     arg (arg-info visible (modality relevant quantity-ω))
+     (pat-lam
+      (clause
+       (("x" ,
+         arg (arg-info visible (modality relevant quantity-ω)) unknown)
+        ∷ [])
+       (arg (arg-info visible (modality relevant quantity-ω))
+        (con (quote right)
+         (arg (arg-info visible (modality relevant quantity-ω)) (var 0) ∷
+          []))
+        ∷ [])
+       (def (quote FT-to-T.base)
+        (arg (arg-info visible (modality relevant quantity-ω))
+         (def (quote Either)
+          (arg (arg-info hidden (modality relevant quantity-ω))
+           (def (quote lzero) [])
+           ∷
+           arg (arg-info hidden (modality relevant quantity-ω))
+           (def (quote lzero) [])
+           ∷
+           arg (arg-info visible (modality relevant quantity-ω))
+           (def (quote ⊥) [])
+           ∷
+           arg (arg-info visible (modality relevant quantity-ω))
+           (def (quote Nat) [])
+           ∷ []))
+         ∷
+         arg (arg-info visible (modality relevant quantity-ω))
+         (def (quote Nat) [])
+         ∷
+         arg (arg-info visible (modality relevant quantity-ω))
+         (pat-lam
+          (clause
+           (("x" ,
+             arg (arg-info visible (modality relevant quantity-ω)) unknown)
+            ∷ [])
+           (arg (arg-info visible (modality relevant quantity-ω)) (var 0) ∷
+            [])
+           (con (quote right)
+            (arg (arg-info visible (modality relevant quantity-ω)) (var 0 []) ∷
+             []))
+           ∷ [])
+          [])
+         ∷
+         arg (arg-info visible (modality relevant quantity-ω)) (var 0 []) ∷
+         []))
+       ∷ [])
+      [])
+     ∷ []))
+   ∷ [])
+  [])
+ ∷ [])
 
 F-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
 F-tactic {A} {B} apply hole = do
@@ -386,7 +566,12 @@ F-tactic {A} {B} apply hole = do
   ft <- Term-to-FTerm `apply
   `hole-ty <- inferType hole
   `flippable <- FT-to-Flippable `A `B ft `hole-ty
+  ``flippable <- quoteTC `flippable
+  ``flippable <- normalise ``flippable
+  `flippable <- unquoteTC ``flippable
   unify `flippable hole
+   -- typeError (termErr {!``flippable!} ∷ [])
+   -- unify `flippable hole
 
 F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B
 F {A} {B} _ {f} = f
@@ -395,7 +580,11 @@ F {A} {B} _ {f} = f
 ----------------------------- TESTS ----------------------------------
 ----------------------------------------------------------------------
 
-----------------------------------------------------------------------
+test-empty-branch : Nat <-> Either ⊥ Nat
+test-empty-branch = F \ { x -> (right x) }
+
+----------------------------------------------------------------
+{-
 idF : {A : Set} -> A <-> A
 idF = F \ { x -> x }
 
@@ -459,3 +648,5 @@ private
     (A × B) <-> Σ B C
   test-dependent-pair f =
     F \ { (a , b) -> a $| f b |$ \ { c -> (b , c) }}
+
+-}
