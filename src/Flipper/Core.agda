@@ -382,6 +382,8 @@ F-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
 F-tactic {A} {B} apply hole = do
   `A <- quoteTC A
   `B <- quoteTC B
+  ensureNoMetas `A
+  ensureNoMetas `B
   `apply <- quoteTC apply
   ft <- Term-to-FTerm `apply
   `hole-ty <- inferType hole
@@ -459,3 +461,6 @@ private
     (A × B) <-> Σ B C
   test-dependent-pair f =
     F \ { (a , b) -> a $| f b |$ \ { c -> (b , c) }}
+
+  test-empty-branch : ⊤ <-> Either ⊤ ⊥
+  test-empty-branch = F \ { x -> left x }
