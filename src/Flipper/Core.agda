@@ -46,7 +46,7 @@ private
 
   {-# TERMINATING #-}
   flatten : FPat -> List String
-  flatten (con c ps) = concatMap flatten ps
+  flatten (con _ ps) = concatMap flatten ps
   flatten (var nm) = [ nm ]
 
   record FEqn : Set where
@@ -54,9 +54,10 @@ private
     constructor MkFEqn
     field
       argp : FPat
-       -- The VarSet stores the names in scope. The Term is a pattern
-       -- lambda abstraction, the type is a pi-abstraction; both
-       -- are abstracted over the VarSet.
+       -- The VarSet stores the names in scope (in particular, it
+       -- stores their order). The Term is a pattern lambda
+       -- abstraction, the type is a pi-abstraction; both are
+       -- abstracted over the VarSet.
       fn : VarSet × Term × Type
       resp : FPat
 
@@ -95,61 +96,78 @@ private
       varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
 
   module T-to-FT where
+    pattern sErr x = left [ strErr x ]
+
+    argPatToFPat : Arg Pattern -> QCParser FPat
+    patToFPat    : Pattern -> QCParser FPat
+    patsToFPats  : List (Arg Pattern) -> QCParser (List FPat)
+    varToFVar    : Nat -> QCParser String
+    termToFPat   : Term -> QCParser FPat
+    argToFPat    : Arg Term -> QCParser FPat
+
+    argPatToFPat (vArg p) = patToFPat p
+    argPatToFPat _        = qcpSError "Non-visible pattern."
+    
+    patToFPat (con c ps) = con c <$> patsToFPats ps
+    patToFPat (var x) = var <$> varToFVar x
+    patToFPat p = qcpError
+      (strErr "Patterns must either be variables or constructors, got "
+      ∷ pattErr p ∷ [])
+
+    patsToFPats [] = pure []
+    patsToFPats (p ∷ ps) = _∷_ <$> argPatToFPat p <*> patsToFPats ps
+
+    varToFVar v ctx with slist-index ctx v
+    ... | res = {!!}
+
+{-
+    varToFVar ctx v with slist-index ctx v
+    ... | just (vv qzero nm) = sErr ("Internal Flipper error: reference to used variable " & nm & " in pattern.")
+    ... | just (vv qone  nm) = pure nm
+    ... | just hv = sErr "Reference to hidden variable in pattern."
+    ... | nothing = sErr "Internal Flipper error: invalid de Bruijn index in pattern."
+
+    termToFPat ctx (var x []) = {!!}
+    termToFPat ctx (con c args) = {!!}
+    termToFPat ctx t = left (strErr "Argument/output must be a variable or constructor, got " ∷ termErr t ∷ [])
+    argToFPat ctx at = {!!}
+
+    qc-extend : QContext -> Telescope -> QContext
+    qc-extend = foldl \ { ctx (nm , vArg _) -> ctx -, vv qone nm
+                        ; ctx _             -> ctx -, hv
+                        }
+
+    Pattern-to-FPat : QContext -> Arg Pattern -> TC FPat
+    Pattern-to-FPat ctx ap with argPatToFPat ctx ap
+    ... | left error = typeError error
+    ... | right p    = pure p
+
+    {-# TERMINATING #-}
+    Term-to-FPat : QContext -> Term -> TC (QContext × FPat)
+    Term-to-FPat ctx (var x []) = do
+      ctx , nm <- QC-use ctx x
+      return (ctx , var nm)
+    Term-to-FPat ctx (con c ps) = do
+      ctx , ps <- args-helper ctx $ map unArg $ filter is-visible ps
+      return (ctx , (con c ps))
+      where
+      args-helper : QContext -> List Term -> TC (QContext × List FPat)
+      args-helper ctx [] = returnTC (ctx , [])
+      args-helper ctx (a ∷ args) = do
+        ctx , a    <- Term-to-FPat ctx a
+        ctx , args <- args-helper ctx args
+        return (ctx , (a ∷ args))
+    Term-to-FPat ctx (meta m args) = blockOnMeta m
+    Term-to-FPat ctx t =
+      typeError (strErr "Argument/output must be a variable or constructor" ∷ [])
+
     private
-      pack-vars-pi-wrap : QContext -> Term -> Term -> TC Term
-      pack-vars-pi-wrap ctx `A `B = do
-        let vars = QC-to-VarSet ctx
-        `A <- pack-vars ctx vars `A
-        `B <- pack-vars ctx vars `B
-        return $ mk-fn-ty (def₂ (quote _<->_) `A `B) vars
-        where
-        mk-fn-ty : Type -> VarSet -> Type
-        mk-fn-ty = slist-foldr
-          (\ { nm rest -> pi (vArg unknown) (abs nm rest) })
-
-      qc-extend : QContext -> List (String × Arg Type) -> QContext
-      qc-extend = foldl \ { ctx (nm , varg _) -> ctx -, vv qone nm
-                          ; ctx _             -> ctx -, hv
-                          }
-
-      {-# TERMINATING #-}
-      Pattern-to-FPat : QContext -> Arg Pattern -> TC FPat
-      Pattern-to-FPat ctx (vArg (var x)) = do
-        left nm <- QC-index ctx x
-          where right <> -> typeErrorS "Reference to hidden variable in pattern."
-        return $ var nm
-      Pattern-to-FPat ctx (vArg (con c ps)) = do
-        ps <- traverse (Pattern-to-FPat ctx) (filter isVisible ps)
-        return $ con c ps
-      Pattern-to-FPat _   (vArg p) = typeError
-        (strErr "Patterns must either be variables or constructors, got "
-        ∷ pattErr p ∷ [])
-      Pattern-to-FPat _   _        = typeErrorS "Non-visible pattern."
-
-      {-# TERMINATING #-}
-      Term-to-FPat : QContext -> Term -> TC (QContext × FPat)
-      Term-to-FPat ctx (var x []) = do
-        ctx , nm <- QC-use ctx x
-        return (ctx , var nm)
-      Term-to-FPat ctx (con c ps) = do
-        ctx , ps <- args-helper ctx $ map unArg $ filter is-visible ps
-        return (ctx , (con c ps))
-        where
-        args-helper : QContext -> List Term -> TC (QContext × List FPat)
-        args-helper ctx [] = returnTC (ctx , [])
-        args-helper ctx (a ∷ args) = do
-          ctx , a    <- Term-to-FPat ctx a
-          ctx , args <- args-helper ctx args
-          return (ctx , (a ∷ args))
-      Term-to-FPat ctx (meta m args) = blockOnMeta m
-      Term-to-FPat ctx t =
-        typeError (strErr "Argument/output must be a variable or constructor" ∷ [])
-
       process-term : QContext -> Term -> TC (List FEqn × FPat)
       process-term ctx (ok-cons `A `B argpat rev-fn res-tel respat rest-term) = do
         ctx , argpat <- Term-to-FPat ctx argpat
-        `A<->`B <- pack-vars-pi-wrap ctx `A `B
-        vars , rev-fn <- pack-vars-lam-wrap ctx rev-fn
+        `A<->`B <- pack-vars-pi-wrap ctx (def₂ (quote _<->_) `A `B)
+        rev-fn <- pack-vars-lam-wrap ctx rev-fn
+        let vars = QC-to-VarSet ctx
         let ctx = qc-extend ctx res-tel
         respat <- Pattern-to-FPat ctx respat
         eqns , outp <- process-term ctx rest-term
@@ -159,13 +177,13 @@ private
          -- TODO: Check that all variables in ctx have been used
         return $ [] , outp
 
-      Clause-to-FBranch : Clause -> TC FBranch
-      Clause-to-FBranch (ok-clause tel inp term) = do
-        let ctx = qc-extend [] tel
-        inp <- Pattern-to-FPat ctx inp
-        eqns , outp <- process-term ctx term
-        return $ branch inp eqns outp
-      Clause-to-FBranch _ = typeErrorS  "Clauses must have exactly one bound pattern."
+    Clause-to-FBranch : Clause -> TC FBranch
+    Clause-to-FBranch (ok-clause tel inp term) = do
+      let ctx = qc-extend [] tel
+      inp <- Pattern-to-FPat ctx inp
+      eqns , outp <- process-term ctx term
+      return $ branch inp eqns outp
+    Clause-to-FBranch _ = typeErrorS  "Clauses must have exactly one bound pattern."
 
     Term-to-FTerm : Term -> TC FTerm
     Term-to-FTerm (ok-pat-lam cs) =
@@ -388,6 +406,11 @@ F-tactic {A} {B} apply hole = do
   ft <- Term-to-FTerm `apply
   `hole-ty <- inferType hole
   `flippable <- FT-to-Flippable `A `B ft `hole-ty
+
+   -- ``flippable <- quoteTC `flippable
+   -- ``flippable <- normalise ``flippable
+   -- typeError {!termErr ``flippable ∷ []!}
+
   unify `flippable hole
 
 F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B
@@ -464,3 +487,4 @@ private
 
   test-empty-branch : ⊤ <-> Either ⊤ ⊥
   test-empty-branch = F \ { x -> left x }
+-}
