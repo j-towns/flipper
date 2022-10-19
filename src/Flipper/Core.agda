@@ -49,6 +49,14 @@ private
   flatten (con _ ps) = concatMap flatten ps
   flatten (var nm) = [ nm ]
 
+  record FOp : Set where
+    pattern
+    constructor MkFOp
+    field
+      vars : VarSet
+      tm : Term
+      ty : Type
+
   record FEqn : Set where
     pattern
     constructor MkFEqn
@@ -58,7 +66,7 @@ private
        -- stores their order). The Term is a pattern lambda
        -- abstraction, the type is a pi-abstraction; both are
        -- abstracted over the VarSet.
-      fn : VarSet × Term × Type
+      fn : FOp
       resp : FPat
 
   record FBranch : Set where
@@ -80,7 +88,7 @@ private
    -- will throw an error. We use the same ok patterns
    -- to reconstruct a Term from a FTerm...
   pattern ok-pat-lam cs = pat-lam cs []
-  pattern ok-clause tel inp term = clause tel (inp ∷ []) term
+  pattern ok-clause tel inp term = clause tel ((vArg inp) ∷ []) term
   pattern ok-cons `A `B argpat rev-fn res-tel respat rest-term =
     def (quote _$|_|$_) (
       harg `A ∷
@@ -95,106 +103,93 @@ private
       varg rev-fn ∷
       varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
 
-  module T-to-FT where
-    pattern sErr x = left [ strErr x ]
+  unArgVisible : forall {A : Set} -> List (Arg A) -> List A
+  unArgVisible as = unArg <$> filter isVisible as
 
-    argPatToFPat : Arg Pattern -> QCParser FPat
-    patToFPat    : Pattern -> QCParser FPat
-    patsToFPats  : List (Arg Pattern) -> QCParser (List FPat)
-    varToFVar    : Nat -> QCParser String
-    termToFPat   : Term -> QCParser FPat
-    argToFPat    : Arg Term -> QCParser FPat
+  Parse : Set -> Set -> Set
+  Parse A B = A -> QCParser B
+  
+  prsArgPat      : Parse (Arg Pattern)        FPat
+  prsPat         : Parse Pattern              FPat
+  prsPats        : Parse (List (Arg Pattern)) (List FPat)
+  prsPatVar      : Parse Nat                  String
+  prsTermPat     : Parse Term                 FPat
+  prsArgsTermPat : Parse (List (Arg Term))    (List FPat)
+  prsTermVar     : Parse Nat                  String
+  prsTel         : Parse Telescope            ⊤
+  prsOp          : Parse (Term × Type × Type) FOp
+  prsEqn         : Parse (Type × Type × Term × Term × Telescope × Pattern) FEqn
+  prsBody        : Parse Term                 (List FEqn × FPat)
+  prsClause      : Parse Clause               FBranch
+  prsTerm        : Parse Term                 FTerm
 
-    argPatToFPat (vArg p) = patToFPat p
-    argPatToFPat _        = qcpSError "Non-visible pattern."
-    
-    patToFPat (con c ps) = con c <$> patsToFPats ps
-    patToFPat (var x) = var <$> varToFVar x
-    patToFPat p = qcpError
-      (strErr "Patterns must either be variables or constructors, got "
-      ∷ pattErr p ∷ [])
+  prsArgPat (vArg p) = prsPat p
+  prsArgPat _        = qcpSError "Non-visible pattern."
+  
+  prsPat (con c ps) = con c <$> prsPats ps
+  prsPat (var x) = var <$> prsPatVar x
+  prsPat p = qcpError
+    (strErr "Patterns must either be variables or constructors, got "
+    ∷ pattErr p ∷ [])
 
-    patsToFPats [] = pure []
-    patsToFPats (p ∷ ps) = _∷_ <$> argPatToFPat p <*> patsToFPats ps
+  prsPats [] = pure []
+  prsPats (p ∷ ps) = _∷_ <$> prsArgPat p <*> prsPats ps
 
-    varToFVar v ctx with slist-index ctx v
-    ... | res = {!!}
+  prsPatVar = patVarLookup
 
-{-
-    varToFVar ctx v with slist-index ctx v
-    ... | just (vv qzero nm) = sErr ("Internal Flipper error: reference to used variable " & nm & " in pattern.")
-    ... | just (vv qone  nm) = pure nm
-    ... | just hv = sErr "Reference to hidden variable in pattern."
-    ... | nothing = sErr "Internal Flipper error: invalid de Bruijn index in pattern."
+  {-# TERMINATING #-}
+  prsTermPat (var x []) = var <$> prsTermVar x
+  prsTermPat (con c args) = con c <$> prsArgsTermPat args
+  prsTermPat t = qcpError
+    (strErr "Argument/output must be a variable or constructor, got " ∷
+     termErr t ∷ [])
 
-    termToFPat ctx (var x []) = {!!}
-    termToFPat ctx (con c args) = {!!}
-    termToFPat ctx t = left (strErr "Argument/output must be a variable or constructor, got " ∷ termErr t ∷ [])
-    argToFPat ctx at = {!!}
+  prsArgsTermPat args = traverse prsTermPat (unArgVisible args)
 
-    qc-extend : QContext -> Telescope -> QContext
-    qc-extend = foldl \ { ctx (nm , vArg _) -> ctx -, vv qone nm
-                        ; ctx _             -> ctx -, hv
-                        }
+  prsTermVar = qcpUse
 
-    Pattern-to-FPat : QContext -> Arg Pattern -> TC FPat
-    Pattern-to-FPat ctx ap with argPatToFPat ctx ap
-    ... | left error = typeError error
-    ... | right p    = pure p
+  prsTel [] = pure unit
+  prsTel ((nm , vArg _) ∷ tel) = qcpExtend nm >> prsTel tel
+  prsTel ((_ , _) ∷ tel) = qcpHExtend >> prsTel tel
 
-    {-# TERMINATING #-}
-    Term-to-FPat : QContext -> Term -> TC (QContext × FPat)
-    Term-to-FPat ctx (var x []) = do
-      ctx , nm <- QC-use ctx x
-      return (ctx , var nm)
-    Term-to-FPat ctx (con c ps) = do
-      ctx , ps <- args-helper ctx $ map unArg $ filter is-visible ps
-      return (ctx , (con c ps))
-      where
-      args-helper : QContext -> List Term -> TC (QContext × List FPat)
-      args-helper ctx [] = returnTC (ctx , [])
-      args-helper ctx (a ∷ args) = do
-        ctx , a    <- Term-to-FPat ctx a
-        ctx , args <- args-helper ctx args
-        return (ctx , (a ∷ args))
-    Term-to-FPat ctx (meta m args) = blockOnMeta m
-    Term-to-FPat ctx t =
-      typeError (strErr "Argument/output must be a variable or constructor" ∷ [])
+  prsOp (t , `A , `B) =
+    MkFOp <$> getVarSet <*> packLamWrap t <*> packPiWrap (def₂ (quote _<->_) `A `B)
 
-    private
-      process-term : QContext -> Term -> TC (List FEqn × FPat)
-      process-term ctx (ok-cons `A `B argpat rev-fn res-tel respat rest-term) = do
-        ctx , argpat <- Term-to-FPat ctx argpat
-        `A<->`B <- pack-vars-pi-wrap ctx (def₂ (quote _<->_) `A `B)
-        rev-fn <- pack-vars-lam-wrap ctx rev-fn
-        let vars = QC-to-VarSet ctx
-        let ctx = qc-extend ctx res-tel
-        respat <- Pattern-to-FPat ctx respat
-        eqns , outp <- process-term ctx rest-term
-        return $ (MkFEqn argpat (vars , rev-fn , `A<->`B) respat ∷ eqns) , outp
-      process-term ctx t = do
-        ctx , outp <- Term-to-FPat ctx t
-         -- TODO: Check that all variables in ctx have been used
-        return $ [] , outp
+  prsEqn (`A , `B , argp , op , resTel , resp) = do
+    argp <- prsTermPat argp
+    op <- prsOp (op , `A , `B)
+    prsTel resTel
+    resp <- prsPat resp
+    pure (MkFEqn argp op resp)
 
-    Clause-to-FBranch : Clause -> TC FBranch
-    Clause-to-FBranch (ok-clause tel inp term) = do
-      let ctx = qc-extend [] tel
-      inp <- Pattern-to-FPat ctx inp
-      eqns , outp <- process-term ctx term
-      return $ branch inp eqns outp
-    Clause-to-FBranch _ = typeErrorS  "Clauses must have exactly one bound pattern."
+  prsBody (ok-cons `A `B argp op resTel respat rest-term) = do
+    eqn <- prsEqn (`A , `B , argp , op , resTel , respat)
+    (eqns , outp) <- prsBody rest-term
+    pure (eqn ∷ eqns , outp) 
+  prsBody t = [] ,_ <$> prsTermPat t
 
-    Term-to-FTerm : Term -> TC FTerm
-    Term-to-FTerm (ok-pat-lam cs) =
-      MkFT <$> (traverse Clause-to-FBranch $ filter not-absurd cs)
-      where
-      not-absurd = \ where
-        (absurd-clause _ _) -> false
-        _                   -> true
-    Term-to-FTerm (meta m args) = blockOnMeta m
-    Term-to-FTerm t = typeErrorS "Only pattern-lambda terms can be reversed."
-  open T-to-FT
+  prsClause (ok-clause tel inp term) = do
+    qcpEmpty
+    prsTel tel
+    inp <- prsPat inp
+    (eqns , outp) <- prsBody term
+    qcpCheckAllUsed
+    pure (branch inp eqns outp)
+  prsClause c = qcpSError "Clauses must have exactly one bound pattern."
+
+  prsTerm (ok-pat-lam cs) = do
+    cs <- traverse prsClause $ filter not-absurd cs
+    pure $ MkFT cs
+    where
+    not-absurd = \ where
+      (absurd-clause _ _) -> false
+      _                   -> true
+  prsTerm t = qcpSError "Only pattern-lambda terms can be reversed."
+
+  termToFTerm : Term -> TC FTerm
+  termToFTerm t with prsTerm t []
+  ... | left (_ , ft) = pure ft
+  ... | right error = typeError error
 
   module FT-to-T where
     private
@@ -245,16 +240,16 @@ private
           let ctx , tel = process-tel [] inp
           inp <- FPat-to-Pattern ctx inp
           term <- process-term ctx eqns outp
-          return (ok-clause tel (varg inp) term)
+          return (ok-clause tel inp term)
           where
           process-term : QContext -> List FEqn -> FPat -> TC Term
           process-term ctx [] outp = snd <$> FPat-to-Term ctx outp
-          process-term ctx (MkFEqn argp (vars , _) resp ∷ eqns) outp = do
+          process-term ctx (MkFEqn argp (MkFOp vars _ _) resp ∷ eqns) outp = do
             ctx , argp <- FPat-to-Term ctx argp
             fn-args <- remap-vars ctx vars
             let fn = var (skip + slist-length ctx + length eqns) (map (varg ∘ var₀) fn-args)
             let ctx , res-tel = process-tel ctx resp
-            respat <- varg <$> FPat-to-Pattern ctx resp
+            respat <- FPat-to-Pattern ctx resp
             rest-term <- process-term ctx eqns outp
             return (reduced-cons argp fn res-tel respat rest-term)
 
@@ -267,24 +262,24 @@ private
           let ctx , tel = process-tel [] outp
           outp <- FPat-to-Pattern ctx outp
           term <- process-term 0 ctx (reverse eqns) inp
-          return (ok-clause tel (varg outp) term)
+          return (ok-clause tel outp term)
           where
           process-term : Nat -> QContext -> List FEqn -> FPat -> TC Term
           process-term _ ctx [] outp = snd <$> FPat-to-Term ctx outp
-          process-term i ctx (MkFEqn resp (vars , _) argp ∷ eqns) outp = do
+          process-term i ctx (MkFEqn resp (MkFOp vars _ _) argp ∷ eqns) outp = do
             ctx , argp <- FPat-to-Term ctx argp
             fn-args <- remap-vars ctx vars
             let fn = var (skip + slist-length ctx + i) (map (varg ∘ var₀) fn-args)
             let ctx , res-tel = process-tel ctx resp
-            respat <- varg <$> FPat-to-Pattern ctx resp
+            respat <- FPat-to-Pattern ctx resp
             rest-term <- process-term (suc i) ctx eqns outp
             return (reduced-cons argp (def (quote flip) (vArg fn ∷ [])) res-tel respat rest-term)
 
       get-fs : FTerm -> List Term
-      get-fs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (_ , f , _) _) -> f) eqns
+      get-fs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ f _) _) -> f) eqns
 
       get-f-tys : FTerm -> List Type
-      get-f-tys (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (_ , _ , ty) _) -> ty) eqns
+      get-f-tys (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ _ ty) _) -> ty) eqns
 
       weaken-f-tys : List Type -> List Type
       weaken-f-tys tys = map (uncurry weaken) (zip (from 0 for length tys) tys)
@@ -340,19 +335,19 @@ private
           let ctx , tel = process-tel [] inp
           inp <- FPat-to-Pattern ctx inp
           term <- process-term ctx eqns outp
-          return (ok-clause tel (varg inp) term)
+          return (ok-clause tel inp term)
           where
           process-term : QContext -> List FEqn -> FPat -> TC Term
           process-term ctx [] outp = do
             outp <- snd <$> FPat-to-Term ctx outp
             let weaken = weaken (slist-length ctx)
             return (proof-base (weaken `A) (weaken `B) (weaken `unapply) outp)
-          process-term ctx (MkFEqn argp (vars , _) resp ∷ eqns) outp = do
+          process-term ctx (MkFEqn argp (MkFOp vars _ _) resp ∷ eqns) outp = do
             ctx , argp <- FPat-to-Term ctx argp
             fn-args <- remap-vars ctx vars
             let fn = var (skip + slist-length ctx + length eqns) (map (varg ∘ var₀) fn-args)
             let ctx , res-tel = process-tel ctx resp
-            respat <- varg <$> FPat-to-Pattern ctx resp
+            respat <- FPat-to-Pattern ctx resp
             rest-term <- process-term ctx eqns outp
             return (proof-cons argp fn res-tel respat rest-term)
 
@@ -366,19 +361,19 @@ private
           let ctx , tel = process-tel [] outp
           outp <- FPat-to-Pattern ctx outp
           term <- process-term 0 ctx (reverse eqns) inp
-          return (ok-clause tel (varg outp) term)
+          return (ok-clause tel outp term)
           where
           process-term : Nat -> QContext -> List FEqn -> FPat -> TC Term
           process-term _ ctx [] outp = do
             outp <- snd <$> FPat-to-Term ctx outp
             let weaken = weaken (slist-length ctx)
             return (proof-base (weaken `B) (weaken `A) (weaken `apply) outp)
-          process-term i ctx (MkFEqn resp (vars , _) argp ∷ eqns) outp = do
+          process-term i ctx (MkFEqn resp (MkFOp vars _ _) argp ∷ eqns) outp = do
             ctx , argp <- FPat-to-Term ctx argp
             fn-args <- remap-vars ctx vars
             let fn = var (skip + slist-length ctx + i) (map (varg ∘ var₀) fn-args)
             let ctx , res-tel = process-tel ctx resp
-            respat <- varg <$> FPat-to-Pattern ctx resp
+            respat <- FPat-to-Pattern ctx resp
             rest-term <- process-term (suc i) ctx eqns outp
             return (proof-cons argp (def (quote flip) (vArg fn ∷ [])) res-tel respat rest-term)
 
@@ -400,17 +395,13 @@ F-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
 F-tactic {A} {B} apply hole = do
   `A <- quoteTC A
   `B <- quoteTC B
+  `apply <- quoteTC apply
   ensureNoMetas `A
   ensureNoMetas `B
-  `apply <- quoteTC apply
-  ft <- Term-to-FTerm `apply
+  ensureNoMetas `apply
+  ft <- termToFTerm `apply
   `hole-ty <- inferType hole
   `flippable <- FT-to-Flippable `A `B ft `hole-ty
-
-   -- ``flippable <- quoteTC `flippable
-   -- ``flippable <- normalise ``flippable
-   -- typeError {!termErr ``flippable ∷ []!}
-
   unify `flippable hole
 
 F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B
@@ -487,4 +478,3 @@ private
 
   test-empty-branch : ⊤ <-> Either ⊤ ⊥
   test-empty-branch = F \ { x -> left x }
--}

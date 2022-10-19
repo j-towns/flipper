@@ -25,15 +25,6 @@ data QVar : Set where
 QContext : Set
 QContext = SnocList QVar
 
-QC-use : QContext -> Nat -> TC (QContext × String)
-QC-use []                   i       = typeErrorS "Invalid variable lookup." -- this should be unreachable
-QC-use (ctx -, vv qzero nm) zero    = typeErrorS $ "Attempt to re-use used variable " & nm & "."
-QC-use (ctx -, vv qone  nm) zero    = return ((ctx -, vv qzero nm) , nm)
-QC-use (ctx -, hv)          zero    = typeErrorS "Attempt to use hidden variable."
-QC-use (ctx -, x)           (suc i) = do
-  ctx , nmty <- QC-use ctx i
-  return $ (ctx -, x) , nmty
-
 QC-use' : QContext -> String -> TC (QContext × Nat)
 QC-use' [] v = typeErrorS $ "Couldn't find name " & v & " in context."
 QC-use' (ctx -, vv qzero nm) v = if nm ==? v
@@ -69,12 +60,38 @@ instance
   ... | right error = right error
   ... | left (ctx , a) with f a
   ...   | pb = pb ctx
-  
+ 
+pattern errS s = right [ strErr s ]
 qcpError : forall {A} -> List ErrorPart -> QCParser A
 qcpError error = const (right error)
 
 qcpSError : forall {A} -> String -> QCParser A
 qcpSError error = qcpError [ strErr error ]
+
+qcpUse : Nat -> QCParser String
+qcpUse i       []                   = errS "Invalid variable lookup." -- this should be unreachable
+qcpUse zero    (ctx -, vv qzero nm) = errS ("Attempt to re-use used variable " & nm & ".")
+qcpUse zero    (ctx -, vv qone  nm) = left ((ctx -, vv qzero nm) , nm)
+qcpUse zero    (ctx -, hv)          = errS "Attempt to use hidden variable."
+qcpUse (suc i) (ctx -, x) with qcpUse i ctx
+... | left (ctx , nm) = left ((ctx -, x) , nm)
+... | right err = right err
+
+qcpExtend : String -> QCParser ⊤
+qcpExtend nm ctx = left ((ctx -, vv qone nm) , unit)
+
+qcpHExtend : QCParser ⊤
+qcpHExtend ctx = left ((ctx -, hv) , unit)
+
+qcpCheckAllUsed : QCParser ⊤
+qcpCheckAllUsed [] = left ([] , unit)
+qcpCheckAllUsed (ctx -, vv qone  nm) = errS ("Unused variable " & nm & ".")
+qcpCheckAllUsed (ctx -, v) with qcpCheckAllUsed ctx
+... | left (ctx , unit) = left ((ctx -, v) , unit)
+... | right error = right error
+
+qcpEmpty : QCParser ⊤
+qcpEmpty _ = left ([] , unit)
 
 VarSet = SnocList String
 
@@ -172,14 +189,24 @@ open Pack
 wrapAbs : (String -> Term -> Term) -> Term -> VarSet -> Term
 wrapAbs = slist-foldr 
 
-pack-vars-lam-wrap : QContext -> Term -> TC Term
-pack-vars-lam-wrap ctx t with pack ctx t
-... | left nm = typeErrorS ("Reference to used variable " & nm & ".")
+packLamWrap : Term -> QCParser Term
+packLamWrap t ctx with pack ctx t
+... | left nm = right (strErr ("Reference to used variable " & nm & ".") ∷ [])
 ... | right t =
-  pure (wrapAbs (\ { nm t -> lam visible (abs nm t) }) t (QC-to-VarSet ctx))
+  left (ctx , wrapAbs (\ { nm t -> lam visible (abs nm t) }) t (QC-to-VarSet ctx))
 
-pack-vars-pi-wrap : QContext -> Type -> TC Type
-pack-vars-pi-wrap ctx ty with pack ctx ty
-... | left nm  = typeErrorS ("Reference to used variable " & nm & " in type.")
+packPiWrap : Type -> QCParser Type
+packPiWrap ty ctx with pack ctx ty
+... | left nm  = right (strErr ("Reference to used variable " & nm & " in type.") ∷ [])
 ... | right ty =
-  pure (wrapAbs (\ { nm ty -> pi (vArg unknown) (abs nm ty) }) ty (QC-to-VarSet ctx))
+  left (ctx , wrapAbs (\ { nm ty -> pi (vArg unknown) (abs nm ty) }) ty (QC-to-VarSet ctx))
+
+patVarLookup : Nat -> QCParser String
+patVarLookup v ctx with slist-index ctx v
+... | just (vv qzero nm) = right (strErr ("Internal Flipper error: reference to used variable " & nm & " in pattern.") ∷ [])
+... | just (vv qone  nm) = left (ctx , nm)
+... | just hv = right (strErr "Reference to hidden variable in pattern." ∷ [])
+... | nothing = right (strErr "Internal Flipper error: invalid de Bruijn index in pattern." ∷ [])
+
+getVarSet : QCParser VarSet
+getVarSet ctx = left (ctx , QC-to-VarSet ctx)
