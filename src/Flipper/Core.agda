@@ -5,16 +5,6 @@ open import Container.Traversable
 open import Tactic.Reflection hiding (VarSet)
 open import Tactic.Reflection.DeBruijn
 
-
-open import Agda.Builtin.Sigma
-open import Agda.Builtin.Unit
-open import Agda.Builtin.List
-open import Agda.Builtin.Bool
- -- open import Agda.Builtin.Equality
-open import Agda.Builtin.String
-open import Agda.Builtin.Nat
-  renaming (_+_ to _+N_; _*_ to _*N_; _<_ to _<N_)
-
 open import Builtin.Reflection
 
 open import Flipper.Term
@@ -44,15 +34,14 @@ private
     con : (c : Name)(ps : List FPat) -> FPat
     var : (nm : String) -> FPat
 
-  {-# TERMINATING #-}
-  flatten : FPat -> List String
-  flatten (con _ ps) = concatMap flatten ps
-  flatten (var nm) = [ nm ]
-
   record FOp : Set where
     pattern
     constructor MkFOp
     field
+       -- The VarSet stores the names in scope (in particular, it
+       -- stores their order). The Term is a pattern lambda
+       -- abstraction, the type is a pi-abstraction; both are
+       -- abstracted over the VarSet.
       vars : VarSet
       tm : Term
       ty : Type
@@ -62,10 +51,6 @@ private
     constructor MkFEqn
     field
       argp : FPat
-       -- The VarSet stores the names in scope (in particular, it
-       -- stores their order). The Term is a pattern lambda
-       -- abstraction, the type is a pi-abstraction; both are
-       -- abstracted over the VarSet.
       fn : FOp
       resp : FPat
 
@@ -94,11 +79,6 @@ private
       harg `A ∷
       harg `B ∷
       harg _ ∷
-      varg argpat ∷
-      varg rev-fn ∷
-      varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
-  pattern reduced-cons argpat rev-fn res-tel respat rest-term =
-    def (quote _$|_|$_) (
       varg argpat ∷
       varg rev-fn ∷
       varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
@@ -190,16 +170,31 @@ private
   Compile : Set -> Set -> Set
   Compile A B = A -> CParser B
 
-  cmpTel        : Compile FPat Telescope
-  cmpPat        : Compile FPat Pattern
-  cmpArgPat     : Compile FPat (Arg Pattern)
-  cmpPatTerm    : Compile FPat Term
-  cmpPatArgTerm : Compile FPat (Arg Term)
-  cmpEqn        : Compile FEqn (Term × Term × Telescope × Pattern)
-  cmpOp         : Compile FOp  (List Nat)
-  cmpBody       : Compile (List FEqn × FPat) Term                 
-  cmpBranch     : Compile FBranch            Clause
-  cmpTerm       : Compile FTerm              Term
+  BodyTemplate : Set
+  BodyTemplate = Term -> Term -> Telescope -> Pattern -> Term -> Term
+
+  BaseTemplate : Set
+  BaseTemplate = Nat -> Term -> Term
+
+  reduced-body : BodyTemplate
+  reduced-body argpat rev-fn res-tel respat rest-term =
+    def (quote _$|_|$_) (
+      varg argpat ∷
+      varg rev-fn ∷
+      varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
+
+  reduced-body-f : BodyTemplate
+  reduced-body-f argpat rev-fn =
+    reduced-body argpat (def (quote flip) (vArg rev-fn ∷ []))
+
+  cmpTel         : Compile FPat Telescope
+  cmpPat         : Compile FPat Pattern
+  cmpArgPat      : Compile FPat (Arg Pattern)
+  cmpPatTerm     : Compile FPat Term
+  cmpPatArgTerm  : Compile FPat (Arg Term)
+  cmpEqn         : Compile FEqn (Term × Term × Telescope × Pattern)
+  cmpEqnF        : Compile FEqn (Term × Term × Telescope × Pattern)
+  cmpOp          : Compile FOp  (List Nat)
 
   {-# TERMINATING #-}
   cmpTel (con c ps) = concat <$> traverse cmpTel ps
@@ -219,20 +214,12 @@ private
   cmpEqn (MkFEqn argp fn resp) = do
     argp <- cmpPatTerm argp
     vars <- cmpOp fn
-    fnLevel <- cpGetLevel
+    fnLevel <- cpGetIndex
     tel <- cmpTel resp
     resp <- cmpPat resp
     pure (argp , var fnLevel (map (vArg ∘ var₀) vars) , tel , resp)
 
-  cmpBody (e ∷ eqns , outp) = do
-    cpDown
-    (argp , fn , tel , resp) <- cmpEqn e
-    rest <- cmpBody (eqns , outp)
-    pure (reduced-cons argp fn tel resp rest)
-  cmpBody ([] , outp) = cmpPatTerm outp
-
-  cmpBranch (branch inp eqns outp) = cpEmpty >>
-    ok-clause <$> cmpTel inp <*> cmpPat inp <*> cmpBody (eqns , outp)
+  cmpEqnF (MkFEqn argp fn resp) = cmpEqn (MkFEqn resp fn argp)
 
   branch-length : FBranch -> Nat
   branch-length (branch _ eqns _) = length eqns
@@ -240,187 +227,133 @@ private
   num-eqns : FTerm -> Nat
   num-eqns (MkFT bs) = sum $ map branch-length bs
 
-  cmpTerm (MkFT bs) = do
-    cpSetLevel (sum $ map branch-length bs)
-    cs <- traverse cmpBranch bs
-    pure (pat-lam cs [])
+  module cmpTerm (bodyTemplate : BodyTemplate)
+    (baseTemplate : BaseTemplate) where
+    cmpBody    : Compile (List FEqn × FPat) Term                 
+    cmpBodyF   : Compile (List FEqn × FPat) Term                 
+    cmpBranch  : Compile FBranch            Clause
+    cmpBranchF : Compile FBranch            Clause
+    cmpTerm    : Compile FTerm              Term
+    cmpTermF   : Compile FTerm              Term
+
+    {-# TERMINATING #-}
+    cmpBody (e ∷ eqns , outp) = do
+      cpDown
+      (argp , fn , tel , resp) <- cmpEqn e
+      rest <- cmpBody (eqns , outp)
+      pure (bodyTemplate argp fn tel resp rest)
+    cmpBody ([] , outp) = baseTemplate <$> cpGetDepth <*> cmpPatTerm outp
+
+    cmpBodyF (e ∷ eqns , outp) = do
+      (argp , fn , tel , resp) <- cmpEqnF e
+      cpUp
+      rest <- cmpBodyF (eqns , outp)
+      pure (bodyTemplate argp fn tel resp rest)
+    cmpBodyF ([] , outp) = baseTemplate <$> cpGetDepth <*> cmpPatTerm outp
+
+    cmpBranch (branch inp eqns outp) = cpEmpty >>
+      ok-clause <$> cmpTel inp <*> cmpPat inp <*> cmpBody (eqns , outp)
+
+    cmpBranchF (branch inp eqns outp) = cpEmpty >>
+      ok-clause <$> cmpTel outp <*> cmpPat outp <*> cmpBodyF (reverse eqns , inp)
+
+    cmpTerm (MkFT bs) = do
+      cpSetLevel (sum $ map branch-length bs)
+      cs <- traverse cmpBranch bs
+      pure (pat-lam cs [])
+
+    cmpTermF (MkFT bs) = do
+      cpSetLevel 0
+      cs <- traverse cmpBranchF (reverse bs)
+      pure (pat-lam cs [])
+  open cmpTerm
 
   FTerm-to-apply : FTerm -> TC Term
-  FTerm-to-apply ft with cmpTerm ft ([] , 0)
+  FTerm-to-apply ft with cmpTerm reduced-body (const id) ft ([] , 0)
   ... | left (_ , t) = pure t
-  ... | right error = typeError (strErr error ∷ [])
+  ... | right error = typeErrorS error
 
-  module FT-to-T where
-    private
-      process-tel : QContext -> FPat -> QContext × List (String × Arg Type)
-      process-tel ctx p = let flat = flatten p in
-        ctx ++S map (vv qone) flat , map (_, varg unknown) flat
-        
-      {-# TERMINATING #-}
-      FPat-to-Pattern : QContext -> FPat -> TC Pattern
-      FPat-to-Pattern ctx (con c ps) =
-        return ∘ con c ∘ map varg =<< traverse (FPat-to-Pattern ctx) ps
-      FPat-to-Pattern ctx (var nm) = return ∘ var =<< QC-lookup ctx nm
+  FTerm-to-unapply : FTerm -> TC Term
+  FTerm-to-unapply ft with cmpTermF reduced-body-f (const id) ft ([] , 0)
+  ... | left (_ , t) = pure t
+  ... | right error = typeErrorS error
 
-      {-# TERMINATING #-}
-      FPat-to-Term : QContext -> FPat -> TC (QContext × Term)
-      FPat-to-Term ctx (var nm) = do
-        ctx , x <- QC-use' ctx nm
-        return (ctx , var₀ x)
-      FPat-to-Term ctx (con c ps) = do
-        ctx , ts <- helper ctx ps
-        return (ctx , (con c (map vArg ts)))
-        where
-        helper : QContext -> List FPat -> TC (QContext × List Term)
-        helper ctx []       = return (ctx , [])
-        helper ctx (p ∷ ps) = do
-          ctx , t  <- FPat-to-Term ctx p
-          ctx , ts <- helper ctx ps
-          return (ctx , t ∷ ts)
+   -- Proof building
+  base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
+  base _ _ unapply b = refl
 
-      remap-vars : QContext -> VarSet -> TC (List Nat)
-      remap-vars ctx = helper []
-        where
-        helper : List Nat -> VarSet -> TC (List Nat)
-        helper done [] = return done
-        helper done (vars -, nm) = do
-          x <- QC-lookup ctx nm
-          helper (x ∷ done) vars
+  _P|_|P_ : {A B C : Set} {rest : C -> A} {unapply-end : B -> A} -> (b : B)
+    -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
+    -> rest (apply f b) ≡ unapply-end b
+  b P| f |P cont with apply f b | unapplyApply f b
+  ... | c | refl = cont c
 
-      FTerm-to-unapply : FTerm -> TC Term
-      FTerm-to-unapply (MkFT bs) = return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
-        where
-        branch-lengths = zip (reverse-cumsum (map branch-length bs)) bs
-        process-branch : Nat × FBranch -> TC Clause
-        process-branch (skip , (branch inp eqns outp)) = do
-          let ctx , tel = process-tel [] outp
-          outp <- FPat-to-Pattern ctx outp
-          term <- process-term 0 ctx (reverse eqns) inp
-          return (ok-clause tel outp term)
-          where
-          process-term : Nat -> QContext -> List FEqn -> FPat -> TC Term
-          process-term _ ctx [] outp = snd <$> FPat-to-Term ctx outp
-          process-term i ctx (MkFEqn resp (MkFOp vars _ _) argp ∷ eqns) outp = do
-            ctx , argp <- FPat-to-Term ctx argp
-            fn-args <- remap-vars ctx vars
-            let fn = var (skip + slist-length ctx + i) (map (varg ∘ var₀) fn-args)
-            let ctx , res-tel = process-tel ctx resp
-            respat <- FPat-to-Pattern ctx resp
-            rest-term <- process-term (suc i) ctx eqns outp
-            return (reduced-cons argp (def (quote flip) (vArg fn ∷ [])) res-tel respat rest-term)
+  proof-base : Term -> Term -> Term -> BaseTemplate
+  proof-base `A `B `unapply depth outp =
+    let weaken = weaken depth in
+    def₄ (quote base) (weaken `A) (weaken `B) (weaken `unapply) outp
 
-      get-fs : FTerm -> List Term
-      get-fs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ f _) _) -> f) eqns
+  proof-body : BodyTemplate
+  proof-body argpat rev-fn res-tel respat rest-term = 
+    def₃ (quote _P|_|P_) 
+      argpat
+      rev-fn
+      (ok-pat-lam (ok-clause res-tel respat rest-term ∷ []))
 
-      get-f-tys : FTerm -> List Type
-      get-f-tys (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ _ ty) _) -> ty) eqns
+  proof-body-f : BodyTemplate
+  proof-body-f argpat rev-fn = proof-body argpat (def (quote flip) (vArg rev-fn ∷ []))
 
-      weaken-f-tys : List Type -> List Type
-      weaken-f-tys tys = map (uncurry weaken) (zip (from 0 for length tys) tys)
+  FTerm-to-ua : FTerm -> Type -> Type -> Term -> TC Term
+  FTerm-to-ua ft `A `B `unapply with cmpTerm proof-body (proof-base `A `B `unapply) ft ([] , 0)
+  ... | left (_ , t) = pure t
+  ... | right error = typeErrorS error
 
-      mk-ty : Type -> FTerm -> Type
-      mk-ty hole-ty ft =
-        foldr (\ { fn-ty rest -> pi (vArg fn-ty) (abs "_" rest) })
-        hole-ty (weaken-f-tys ∘ get-f-tys $ ft)
+  FTerm-to-au : FTerm -> Type -> Type -> Term -> TC Term
+  FTerm-to-au ft `A `B `apply with cmpTermF proof-body-f (proof-base `B `A `apply) ft ([] , 0)
+  ... | left (_ , t) = pure t
+  ... | right error = typeErrorS error
 
-      mk-tel : Nat -> Telescope
-      mk-tel n =
-        zip (zipWith _&_ (replicate n "f") (map show (from 0 for n)))
-          (replicate n (vArg unknown))
+  get-fs : FTerm -> List Term
+  get-fs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ f _) _) -> f) eqns
 
-      mk-ps : Nat -> List (Arg Pattern)
-      mk-ps n = map (vArg ∘ var) (reverse (from 0 for n))
+  get-f-tys : FTerm -> List Type
+  get-f-tys (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ _ ty) _) -> ty) eqns
 
-      pattern Finner `apply `unapply `ua `au =
-        con₄ (quote MkF) `apply `unapply `ua `au
-      pattern Fouter ty tel ps inner args =
-        def (quote id) (
-          hArg unknown ∷ hArg ty ∷
-          vArg (pat-lam (clause tel ps inner ∷ []) []) ∷ args)
+  weaken-f-tys : List Type -> List Type
+  weaken-f-tys tys = map (uncurry weaken) (zip (from 0 for length tys) tys)
 
-       -- Proof building
-      base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
-      base _ _ unapply b = refl
+  mk-ty : Type -> FTerm -> Type
+  mk-ty hole-ty ft =
+    foldr (\ { fn-ty rest -> pi (vArg fn-ty) (abs "_" rest) })
+    hole-ty (weaken-f-tys ∘ get-f-tys $ ft)
 
-      _P|_|P_ : {A B C : Set} {rest : C -> A} {unapply-end : B -> A} -> (b : B)
-        -> (f : B <-> C) -> ((c : C) -> rest c ≡ unapply-end (unapply f c))
-        -> rest (apply f b) ≡ unapply-end b
-      b P| f |P cont with apply f b | unapplyApply f b
-      ... | c | refl = cont c
+  mk-tel : Nat -> Telescope
+  mk-tel n =
+    zip (zipWith _&_ (replicate n "f") (map show (from 0 for n)))
+      (replicate n (vArg unknown))
 
-      pattern proof-base `A `B `unapply outp =
-        def₄ (quote base) `A `B `unapply outp
-      pattern proof-cons argpat rev-fn res-tel respat rest-term =
-        def₃ (quote _P|_|P_) 
-          argpat
-          rev-fn
-          (ok-pat-lam (ok-clause res-tel respat rest-term ∷ []))
+  mk-ps : Nat -> List (Arg Pattern)
+  mk-ps n = map (vArg ∘ var) (reverse (from 0 for n))
 
-      FTerm-to-ua : FTerm -> Type -> Type -> Term -> TC Term
-      FTerm-to-ua (MkFT bs) `A `B `unapply =
-        return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
-        where
-        branch-lengths = zip (reverse-cumsum (map branch-length bs)) bs
-        process-branch : Nat × FBranch -> TC Clause
-        process-branch (skip , (branch inp eqns outp)) = do
-          let ctx , tel = process-tel [] inp
-          inp <- FPat-to-Pattern ctx inp
-          term <- process-term ctx eqns outp
-          return (ok-clause tel inp term)
-          where
-          process-term : QContext -> List FEqn -> FPat -> TC Term
-          process-term ctx [] outp = do
-            outp <- snd <$> FPat-to-Term ctx outp
-            let weaken = weaken (slist-length ctx)
-            return (proof-base (weaken `A) (weaken `B) (weaken `unapply) outp)
-          process-term ctx (MkFEqn argp (MkFOp vars _ _) resp ∷ eqns) outp = do
-            ctx , argp <- FPat-to-Term ctx argp
-            fn-args <- remap-vars ctx vars
-            let fn = var (skip + slist-length ctx + length eqns) (map (varg ∘ var₀) fn-args)
-            let ctx , res-tel = process-tel ctx resp
-            respat <- FPat-to-Pattern ctx resp
-            rest-term <- process-term ctx eqns outp
-            return (proof-cons argp fn res-tel respat rest-term)
+  pattern Finner `apply `unapply `ua `au =
+    con₄ (quote MkF) `apply `unapply `ua `au
+  pattern Fouter ty tel ps inner args =
+    def (quote id) (
+      hArg unknown ∷ hArg ty ∷
+      vArg (pat-lam (clause tel ps inner ∷ []) []) ∷ args)
 
-      FTerm-to-au : FTerm -> Type -> Type -> Term -> TC Term
-      FTerm-to-au (MkFT bs) `A `B `apply =
-        return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
-        where
-        branch-lengths = zip (reverse-cumsum (map branch-length bs)) bs
-        process-branch : Nat × FBranch -> TC Clause
-        process-branch (skip , (branch inp eqns outp)) = do
-          let ctx , tel = process-tel [] outp
-          outp <- FPat-to-Pattern ctx outp
-          term <- process-term 0 ctx (reverse eqns) inp
-          return (ok-clause tel outp term)
-          where
-          process-term : Nat -> QContext -> List FEqn -> FPat -> TC Term
-          process-term _ ctx [] outp = do
-            outp <- snd <$> FPat-to-Term ctx outp
-            let weaken = weaken (slist-length ctx)
-            return (proof-base (weaken `B) (weaken `A) (weaken `apply) outp)
-          process-term i ctx (MkFEqn resp (MkFOp vars _ _) argp ∷ eqns) outp = do
-            ctx , argp <- FPat-to-Term ctx argp
-            fn-args <- remap-vars ctx vars
-            let fn = var (skip + slist-length ctx + i) (map (varg ∘ var₀) fn-args)
-            let ctx , res-tel = process-tel ctx resp
-            respat <- FPat-to-Pattern ctx resp
-            rest-term <- process-term (suc i) ctx eqns outp
-            return (proof-cons argp (def (quote flip) (vArg fn ∷ [])) res-tel respat rest-term)
-
-    FT-to-Flippable : Type -> Type -> FTerm -> Type -> TC Term
-    FT-to-Flippable `A `B ft hole-ty = do
-      `apply <- FTerm-to-apply ft
-      `unapply <- FTerm-to-unapply ft
-      let fs = get-fs ft
-      let ty = mk-ty (weaken (length fs) hole-ty) ft 
-      let `A = weaken (length fs) `A
-      let `B = weaken (length fs) `B
-      `ua <- FTerm-to-ua ft `A `B `unapply
-      `au <- FTerm-to-au ft `A `B `apply
-      let `f = Finner `apply `unapply `ua `au
-      return (Fouter ty (mk-tel (num-eqns ft)) (mk-ps (num-eqns ft)) `f (map vArg fs))
-  open FT-to-T
+  FT-to-Flippable : Type -> Type -> FTerm -> Type -> TC Term
+  FT-to-Flippable `A `B ft hole-ty = do
+    `apply <- FTerm-to-apply ft
+    `unapply <- FTerm-to-unapply ft
+    let fs = get-fs ft
+    let ty = mk-ty (weaken (length fs) hole-ty) ft 
+    let `A = weaken (length fs) `A
+    let `B = weaken (length fs) `B
+    `ua <- FTerm-to-ua ft `A `B `unapply
+    `au <- FTerm-to-au ft `A `B `apply
+    let `f = Finner `apply `unapply `ua `au
+    return (Fouter ty (mk-tel (num-eqns ft)) (mk-ps (num-eqns ft)) `f (map vArg fs))
 
 F-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
 F-tactic {A} {B} apply hole = do
@@ -433,12 +366,6 @@ F-tactic {A} {B} apply hole = do
   ft <- termToFTerm `apply
   `hole-ty <- inferType hole
   `flippable <- FT-to-Flippable `A `B ft `hole-ty
-
-  {-
-  ``flippable <- quoteTC `flippable
-  ``flippable <- normalise ``flippable
-  typeError (termErr `flippable ∷ [])
-  -}
   unify `flippable hole
 
 F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B

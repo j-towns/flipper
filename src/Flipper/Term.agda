@@ -3,13 +3,6 @@ module Flipper.Term where
 open import Prelude hiding (abs)
 open import Container.Traversable
 
-open import Agda.Builtin.List
-open import Agda.Builtin.Nat using (Nat; zero; suc)
-  renaming (_+_ to _+N_; _*_ to _*N_; _-_ to _-N_; _<_ to _<N_)
-open import Agda.Builtin.Sigma
-open import Agda.Builtin.String
-open import Agda.Builtin.Bool
-
 open import Builtin.Reflection
 
 open import Flipper.Util
@@ -24,19 +17,6 @@ data QVar : Set where
                                 -- by `unknown`
 QContext : Set
 QContext = SnocList QVar
-
-QC-use' : QContext -> String -> TC (QContext × Nat)
-QC-use' [] v = typeErrorS $ "Couldn't find name " & v & " in context."
-QC-use' (ctx -, vv qzero nm) v = if nm ==? v
-  then typeErrorS $ "Internal Flipper error."  -- should be unreachable
-  else QC-use' ctx v >>= \ (ctx , x) -> return ((ctx -, hv) , (suc x))
-QC-use' (ctx -, vv qone  nm) v = if nm ==? v
-  then return ((ctx -, vv qzero nm) , zero)
-  else QC-use' ctx v >>= \ (ctx , x) -> return ((ctx -, vv qone nm) , suc x)
-QC-use' (ctx -, hv) v = QC-use' ctx v >>= \ (ctx , x) -> return ((ctx -, hv) , (suc x))
-
-QC-lookup : QContext -> String -> TC Nat
-QC-lookup ctx nm = fmap snd $ QC-use' ctx nm
 
 Parser : Set -> Set -> Set -> Set
 Parser C E A = C -> Either (C × A) E
@@ -253,8 +233,11 @@ cpDown : CParser ⊤
 cpDown (ctx , zero) = right "_"
 cpDown (ctx , suc lvl) = left ((ctx , lvl) , unit)
 
-cpGetLevel : CParser Nat
-cpGetLevel (ctx , lvl) = left ((ctx , lvl) , slist-length ctx + lvl)
+cpGetIndex : CParser Nat
+cpGetIndex (ctx , lvl) = left ((ctx , lvl) , slist-length ctx + lvl)
+
+cpGetDepth : CParser Nat
+cpGetDepth (ctx , lvl) = left ((ctx , lvl) , slist-length ctx)
 
 cpEmpty : CParser ⊤
 cpEmpty (_ , lvl) = left (([] , lvl) , unit)
