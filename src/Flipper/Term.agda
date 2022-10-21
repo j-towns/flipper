@@ -38,29 +38,33 @@ QC-use' (ctx -, hv) v = QC-use' ctx v >>= \ (ctx , x) -> return ((ctx -, hv) , (
 QC-lookup : QContext -> String -> TC Nat
 QC-lookup ctx nm = fmap snd $ QC-use' ctx nm
 
+Parser : Set -> Set -> Set -> Set
+Parser C E A = C -> Either (C × A) E
+
+module _ {C E : Set} where
+  instance
+    FunctorParser : Functor (Parser C E)
+    fmap {{FunctorParser}} f p ctx with p ctx
+    ... | left (ctx , a) = left (ctx , f a)
+    ... | right error = right error
+
+    ApplicativeParser : Applicative (Parser C E)
+    pure {{ApplicativeParser}} a ctx = left (ctx , a)
+    _<*>_ {{ApplicativeParser}} pf pa ctx with pf ctx
+    ... | right error      = right error
+    ... | left (ctx , f) with pa ctx
+    ...   | left (ctx , a) = left (ctx , f a)
+    ...   | right error    = right error
+
+    MonadParser : Monad (Parser C E)
+    _>>=_ {{MonadParser}} pa f ctx with pa ctx
+    ... | right error = right error
+    ... | left (ctx , a) with f a
+    ...   | pb = pb ctx
+
 QCParser : Set -> Set
-QCParser A = QContext -> Either (QContext × A) (List ErrorPart)
+QCParser = Parser QContext (List ErrorPart)
 
-instance
-  FunctorQCP : Functor QCParser
-  fmap {{FunctorQCP}} f p ctx with p ctx
-  ... | left (ctx , a) = left (ctx , f a)
-  ... | right error = right error
-
-  ApplicativeQCP : Applicative QCParser
-  pure {{ApplicativeQCP}} a ctx = left (ctx , a)
-  _<*>_ {{ApplicativeQCP}} pf pa ctx with pf ctx
-  ... | right error      = right error
-  ... | left (ctx , f) with pa ctx
-  ...   | left (ctx , a) = left (ctx , f a)
-  ...   | right error    = right error
-
-  MonadQCP : Monad QCParser
-  _>>=_ {{MonadQCP}} pa f ctx with pa ctx
-  ... | right error = right error
-  ... | left (ctx , a) with f a
-  ...   | pb = pb ctx
- 
 pattern errS s = right [ strErr s ]
 qcpError : forall {A} -> List ErrorPart -> QCParser A
 qcpError error = const (right error)
@@ -210,3 +214,47 @@ patVarLookup v ctx with slist-index ctx v
 
 getVarSet : QCParser VarSet
 getVarSet ctx = left (ctx , QC-to-VarSet ctx)
+
+
+Context : Set
+Context = SnocList String
+
+CParser : Set -> Set
+CParser = Parser (Context × Nat) String
+
+cpExtend : String -> CParser ⊤
+cpExtend nm (ctx , lvl) = left (((ctx -, nm) , lvl) , unit)
+
+{-# TERMINATING #-}
+cpLookup : String -> CParser Nat
+cpLookup nm ([]         , lvl) = right nm
+cpLookup nm ((ctx -, v) , lvl) with nm ==? v 
+... | true  = left (((ctx -, v) , lvl) , zero)
+... | false with cpLookup nm (ctx , lvl)
+...   | left ((ctx , lvl) , x) = left (((ctx -, v) , lvl) , suc x)
+...   | right nm = right nm
+
+cpRemap : VarSet -> CParser (List Nat)
+cpRemap vars = go [] vars
+  where
+  go : List Nat -> VarSet -> CParser (List Nat)
+  go done [] = pure done
+  go done (vars -, nm) = do
+    x <- cpLookup nm
+    go (x ∷ done) vars
+
+cpSetLevel : Nat -> CParser ⊤
+cpSetLevel lvl (ctx , _) = left ((ctx , lvl) , unit)
+
+cpUp : CParser ⊤
+cpUp (ctx , lvl) = left ((ctx , suc lvl) , unit)
+
+cpDown : CParser ⊤
+cpDown (ctx , zero) = right "_"
+cpDown (ctx , suc lvl) = left ((ctx , lvl) , unit)
+
+cpGetLevel : CParser Nat
+cpGetLevel (ctx , lvl) = left ((ctx , lvl) , slist-length ctx + lvl)
+
+cpEmpty : CParser ⊤
+cpEmpty (_ , lvl) = left (([] , lvl) , unit)

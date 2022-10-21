@@ -89,7 +89,7 @@ private
    -- to reconstruct a Term from a FTerm...
   pattern ok-pat-lam cs = pat-lam cs []
   pattern ok-clause tel inp term = clause tel ((vArg inp) ∷ []) term
-  pattern ok-cons `A `B argpat rev-fn res-tel respat rest-term =
+  pattern ok-body `A `B argpat rev-fn res-tel respat rest-term =
     def (quote _$|_|$_) (
       harg `A ∷
       harg `B ∷
@@ -111,7 +111,6 @@ private
   
   prsArgPat      : Parse (Arg Pattern)        FPat
   prsPat         : Parse Pattern              FPat
-  prsPats        : Parse (List (Arg Pattern)) (List FPat)
   prsPatVar      : Parse Nat                  String
   prsTermPat     : Parse Term                 FPat
   prsArgsTermPat : Parse (List (Arg Term))    (List FPat)
@@ -126,19 +125,16 @@ private
   prsArgPat (vArg p) = prsPat p
   prsArgPat _        = qcpSError "Non-visible pattern."
   
-  prsPat (con c ps) = con c <$> prsPats ps
+  prsPat (con c ps) = con c <$> traverse prsArgPat ps
   prsPat (var x) = var <$> prsPatVar x
   prsPat p = qcpError
     (strErr "Patterns must either be variables or constructors, got "
     ∷ pattErr p ∷ [])
 
-  prsPats [] = pure []
-  prsPats (p ∷ ps) = _∷_ <$> prsArgPat p <*> prsPats ps
-
   prsPatVar = patVarLookup
 
   {-# TERMINATING #-}
-  prsTermPat (var x []) = var <$> prsTermVar x
+  prsTermPat (var₀ x) = var <$> prsTermVar x
   prsTermPat (con c args) = con c <$> prsArgsTermPat args
   prsTermPat t = qcpError
     (strErr "Argument/output must be a variable or constructor, got " ∷
@@ -162,7 +158,7 @@ private
     resp <- prsPat resp
     pure (MkFEqn argp op resp)
 
-  prsBody (ok-cons `A `B argp op resTel respat rest-term) = do
+  prsBody (ok-body `A `B argp op resTel respat rest-term) = do
     eqn <- prsEqn (`A , `B , argp , op , resTel , respat)
     (eqns , outp) <- prsBody rest-term
     pure (eqn ∷ eqns , outp) 
@@ -190,6 +186,69 @@ private
   termToFTerm t with prsTerm t []
   ... | left (_ , ft) = pure ft
   ... | right error = typeError error
+
+  Compile : Set -> Set -> Set
+  Compile A B = A -> CParser B
+
+  cmpTel        : Compile FPat Telescope
+  cmpPat        : Compile FPat Pattern
+  cmpArgPat     : Compile FPat (Arg Pattern)
+  cmpPatTerm    : Compile FPat Term
+  cmpPatArgTerm : Compile FPat (Arg Term)
+  cmpEqn        : Compile FEqn (Term × Term × Telescope × Pattern)
+  cmpOp         : Compile FOp  (List Nat)
+  cmpBody       : Compile (List FEqn × FPat) Term                 
+  cmpBranch     : Compile FBranch            Clause
+  cmpTerm       : Compile FTerm              Term
+
+  {-# TERMINATING #-}
+  cmpTel (con c ps) = concat <$> traverse cmpTel ps
+  cmpTel (var nm) = cpExtend nm >> pure [ nm , vArg unknown ]
+
+  cmpPat (con c ps) = con c <$> traverse cmpArgPat ps
+  cmpPat (var nm) = var <$> cpLookup nm
+  cmpArgPat p = vArg <$> cmpPat p
+
+  cmpPatTerm (con c ps) = con c <$> traverse cmpPatArgTerm ps
+  cmpPatTerm (var nm) = var₀ <$> cpLookup nm
+
+  cmpPatArgTerm p = vArg <$> cmpPatTerm p
+
+  cmpOp (MkFOp vars _ _) = cpRemap vars
+
+  cmpEqn (MkFEqn argp fn resp) = do
+    argp <- cmpPatTerm argp
+    vars <- cmpOp fn
+    fnLevel <- cpGetLevel
+    tel <- cmpTel resp
+    resp <- cmpPat resp
+    pure (argp , var fnLevel (map (vArg ∘ var₀) vars) , tel , resp)
+
+  cmpBody (e ∷ eqns , outp) = do
+    cpDown
+    (argp , fn , tel , resp) <- cmpEqn e
+    rest <- cmpBody (eqns , outp)
+    pure (reduced-cons argp fn tel resp rest)
+  cmpBody ([] , outp) = cmpPatTerm outp
+
+  cmpBranch (branch inp eqns outp) = cpEmpty >>
+    ok-clause <$> cmpTel inp <*> cmpPat inp <*> cmpBody (eqns , outp)
+
+  branch-length : FBranch -> Nat
+  branch-length (branch _ eqns _) = length eqns
+
+  num-eqns : FTerm -> Nat
+  num-eqns (MkFT bs) = sum $ map branch-length bs
+
+  cmpTerm (MkFT bs) = do
+    cpSetLevel (sum $ map branch-length bs)
+    cs <- traverse cmpBranch bs
+    pure (pat-lam cs [])
+
+  FTerm-to-apply : FTerm -> TC Term
+  FTerm-to-apply ft with cmpTerm ft ([] , 0)
+  ... | left (_ , t) = pure t
+  ... | right error = typeError (strErr error ∷ [])
 
   module FT-to-T where
     private
@@ -227,31 +286,6 @@ private
         helper done (vars -, nm) = do
           x <- QC-lookup ctx nm
           helper (x ∷ done) vars
-
-      branch-length : FBranch -> Nat
-      branch-length (branch _ eqns _) = length eqns
-
-      FTerm-to-apply : FTerm -> TC Term
-      FTerm-to-apply (MkFT bs) = return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
-        where
-        branch-lengths = zip (reverse-cumsum (map branch-length bs)) bs
-        process-branch : Nat × FBranch -> TC Clause
-        process-branch (skip , (branch inp eqns outp)) = do
-          let ctx , tel = process-tel [] inp
-          inp <- FPat-to-Pattern ctx inp
-          term <- process-term ctx eqns outp
-          return (ok-clause tel inp term)
-          where
-          process-term : QContext -> List FEqn -> FPat -> TC Term
-          process-term ctx [] outp = snd <$> FPat-to-Term ctx outp
-          process-term ctx (MkFEqn argp (MkFOp vars _ _) resp ∷ eqns) outp = do
-            ctx , argp <- FPat-to-Term ctx argp
-            fn-args <- remap-vars ctx vars
-            let fn = var (skip + slist-length ctx + length eqns) (map (varg ∘ var₀) fn-args)
-            let ctx , res-tel = process-tel ctx resp
-            respat <- FPat-to-Pattern ctx resp
-            rest-term <- process-term ctx eqns outp
-            return (reduced-cons argp fn res-tel respat rest-term)
 
       FTerm-to-unapply : FTerm -> TC Term
       FTerm-to-unapply (MkFT bs) = return ∘ ok-pat-lam =<< traverse process-branch branch-lengths
@@ -296,9 +330,6 @@ private
 
       mk-ps : Nat -> List (Arg Pattern)
       mk-ps n = map (vArg ∘ var) (reverse (from 0 for n))
-
-      num-eqns : FTerm -> Nat
-      num-eqns (MkFT bs) = sum $ map branch-length bs
 
       pattern Finner `apply `unapply `ua `au =
         con₄ (quote MkF) `apply `unapply `ua `au
@@ -402,6 +433,12 @@ F-tactic {A} {B} apply hole = do
   ft <- termToFTerm `apply
   `hole-ty <- inferType hole
   `flippable <- FT-to-Flippable `A `B ft `hole-ty
+
+  {-
+  ``flippable <- quoteTC `flippable
+  ``flippable <- normalise ``flippable
+  typeError (termErr `flippable ∷ [])
+  -}
   unify `flippable hole
 
 F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B
