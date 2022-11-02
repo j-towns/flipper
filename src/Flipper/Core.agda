@@ -76,19 +76,19 @@ private
   pattern ok-clause tel inp term = clause tel ((vArg inp) ∷ []) term
   pattern ok-body `A `B argpat rev-fn res-tel respat rest-term =
     def (quote _$|_|$_) (
-      harg `A ∷
-      harg `B ∷
-      harg _ ∷
-      varg argpat ∷
-      varg rev-fn ∷
-      varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
+      hArg `A ∷
+      hArg `B ∷
+      hArg _ ∷
+      vArg argpat ∷
+      vArg rev-fn ∷
+      vArg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
 
   unArgVisible : forall {A : Set} -> List (Arg A) -> List A
   unArgVisible as = unArg <$> filter isVisible as
 
   Parse : Set -> Set -> Set
   Parse A B = A -> QCParser B
-  
+
   prsArgPat      : Parse (Arg Pattern)        FPat
   prsPat         : Parse Pattern              FPat
   prsPatVar      : Parse Nat                  String
@@ -104,7 +104,7 @@ private
 
   prsArgPat (vArg p) = prsPat p
   prsArgPat _        = qcpSError "Non-visible pattern."
-  
+
   prsPat (con c ps) = con c <$> traverse prsArgPat ps
   prsPat (var x) = var <$> prsPatVar x
   prsPat p = qcpError
@@ -141,7 +141,7 @@ private
   prsBody (ok-body `A `B argp op resTel respat rest-term) = do
     eqn <- prsEqn (`A , `B , argp , op , resTel , respat)
     (eqns , outp) <- prsBody rest-term
-    pure (eqn ∷ eqns , outp) 
+    pure (eqn ∷ eqns , outp)
   prsBody t = [] ,_ <$> prsTermPat t
 
   prsClause (ok-clause tel inp term) = do
@@ -170,22 +170,16 @@ private
   Compile : Set -> Set -> Set
   Compile A B = A -> CParser B
 
-  BodyTemplate : Set
-  BodyTemplate = Term -> Term -> Telescope -> Pattern -> Term -> Term
-
   BaseTemplate : Set
   BaseTemplate = Nat -> Term -> Term
 
-  reduced-body : BodyTemplate
-  reduced-body argpat rev-fn res-tel respat rest-term =
-    def (quote _$|_|$_) (
-      varg argpat ∷
-      varg rev-fn ∷
-      varg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
+  body : Name -> Term -> Term -> Telescope -> Pattern -> Term -> Term
+  body nm argpat rev-fn res-tel respat rest-term =
+    def₃ nm argpat rev-fn
+      (ok-pat-lam [ ok-clause res-tel respat rest-term ])
 
-  reduced-body-f : BodyTemplate
-  reduced-body-f argpat rev-fn =
-    reduced-body argpat (def (quote flip) (vArg rev-fn ∷ []))
+  `flip : Term -> Term
+  `flip = def₁ (quote flip)
 
   cmpTel         : Compile FPat Telescope
   cmpPat         : Compile FPat Pattern
@@ -221,34 +215,34 @@ private
 
   cmpEqnF (MkFEqn argp fn resp) = cmpEqn (MkFEqn resp fn argp)
 
-  branch-length : FBranch -> Nat
-  branch-length (branch _ eqns _) = length eqns
+  branchLength : FBranch -> Nat
+  branchLength (branch _ eqns _) = length eqns
 
-  num-eqns : FTerm -> Nat
-  num-eqns (MkFT bs) = sum $ map branch-length bs
+  numEqns : FTerm -> Nat
+  numEqns (MkFT bs) = sum $ map branchLength bs
 
-  module cmpTerm (bodyTemplate : BodyTemplate)
+  module cmp (bodyTemplate : Name)
     (baseTemplate : BaseTemplate) where
-    cmpBody    : Compile (List FEqn × FPat) Term                 
-    cmpBodyF   : Compile (List FEqn × FPat) Term                 
+    cmpBody    : Compile (List FEqn × FPat) Term
+    cmpBodyF   : Compile (List FEqn × FPat) Term
     cmpBranch  : Compile FBranch            Clause
     cmpBranchF : Compile FBranch            Clause
-    cmpTerm    : Compile FTerm              Term
-    cmpTermF   : Compile FTerm              Term
+    cmp        : Compile FTerm              Term
+    cmpF       : Compile FTerm              Term
 
     {-# TERMINATING #-}
     cmpBody (e ∷ eqns , outp) = do
       cpDown
       (argp , fn , tel , resp) <- cmpEqn e
       rest <- cmpBody (eqns , outp)
-      pure (bodyTemplate argp fn tel resp rest)
+      pure (body bodyTemplate argp fn tel resp rest)
     cmpBody ([] , outp) = baseTemplate <$> cpGetDepth <*> cmpPatTerm outp
 
     cmpBodyF (e ∷ eqns , outp) = do
       (argp , fn , tel , resp) <- cmpEqnF e
       cpUp
       rest <- cmpBodyF (eqns , outp)
-      pure (bodyTemplate argp fn tel resp rest)
+      pure (body bodyTemplate argp (`flip fn) tel resp rest)
     cmpBodyF ([] , outp) = baseTemplate <$> cpGetDepth <*> cmpPatTerm outp
 
     cmpBranch (branch inp eqns outp) = cpEmpty >>
@@ -257,26 +251,22 @@ private
     cmpBranchF (branch inp eqns outp) = cpEmpty >>
       ok-clause <$> cmpTel outp <*> cmpPat outp <*> cmpBodyF (reverse eqns , inp)
 
-    cmpTerm (MkFT bs) = do
-      cpSetLevel (sum $ map branch-length bs)
+    cmp (MkFT bs) = do
+      cpSetLevel (sum $ map branchLength bs)
       cs <- traverse cmpBranch bs
       pure (pat-lam cs [])
 
-    cmpTermF (MkFT bs) = do
+    cmpF (MkFT bs) = do
       cpSetLevel 0
       cs <- traverse cmpBranchF (reverse bs)
       pure (pat-lam cs [])
-  open cmpTerm
+  open cmp
 
-  FTerm-to-apply : FTerm -> TC Term
-  FTerm-to-apply ft with cmpTerm reduced-body (const id) ft ([] , 0)
-  ... | left (_ , t) = pure t
-  ... | right error = typeErrorS error
+  ftToApply : FTerm -> TC Term
+  ftToApply ft = cpInTC $ cmp (quote _$|_|$_) (const id) ft
 
-  FTerm-to-unapply : FTerm -> TC Term
-  FTerm-to-unapply ft with cmpTermF reduced-body-f (const id) ft ([] , 0)
-  ... | left (_ , t) = pure t
-  ... | right error = typeErrorS error
+  ftToUnapply : FTerm -> TC Term
+  ftToUnapply ft = cpInTC $ cmpF (quote _$|_|$_) (const id) ft
 
    -- Proof building
   base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
@@ -288,52 +278,37 @@ private
   b P| f |P cont with apply f b | unapplyApply f b
   ... | c | refl = cont c
 
-  proof-base : Term -> Term -> Term -> BaseTemplate
-  proof-base `A `B `unapply depth outp =
+  `base : Term -> Term -> Term -> BaseTemplate
+  `base `A `B `unapply depth outp =
     let weaken = weaken depth in
     def₄ (quote base) (weaken `A) (weaken `B) (weaken `unapply) outp
 
-  proof-body : BodyTemplate
-  proof-body argpat rev-fn res-tel respat rest-term = 
-    def₃ (quote _P|_|P_) 
-      argpat
-      rev-fn
-      (ok-pat-lam (ok-clause res-tel respat rest-term ∷ []))
+  ftToUA : FTerm -> Type -> Type -> Term -> TC Term
+  ftToUA ft `A `B `unapply =
+    cpInTC $ cmp (quote _P|_|P_) (`base `A `B `unapply) ft
 
-  proof-body-f : BodyTemplate
-  proof-body-f argpat rev-fn = proof-body argpat (def (quote flip) (vArg rev-fn ∷ []))
+  ftToAU : FTerm -> Type -> Type -> Term -> TC Term
+  ftToAU ft `A `B `apply =
+    cpInTC $ cmpF (quote _P|_|P_) (`base `B `A `apply) ft
 
-  FTerm-to-ua : FTerm -> Type -> Type -> Term -> TC Term
-  FTerm-to-ua ft `A `B `unapply with cmpTerm proof-body (proof-base `A `B `unapply) ft ([] , 0)
-  ... | left (_ , t) = pure t
-  ... | right error = typeErrorS error
+  getFs : FTerm -> List Term
+  getFs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ f _) _) -> f) eqns
 
-  FTerm-to-au : FTerm -> Type -> Type -> Term -> TC Term
-  FTerm-to-au ft `A `B `apply with cmpTermF proof-body-f (proof-base `B `A `apply) ft ([] , 0)
-  ... | left (_ , t) = pure t
-  ... | right error = typeErrorS error
+  getFTys : FTerm -> List Type
+  getFTys (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ _ ty) _) -> ty) eqns
 
-  get-fs : FTerm -> List Term
-  get-fs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ f _) _) -> f) eqns
+  weakenFTys : List Type -> List Type
+  weakenFTys tys = map (uncurry weaken) (zip (from 0 for length tys) tys)
 
-  get-f-tys : FTerm -> List Type
-  get-f-tys (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ _ ty) _) -> ty) eqns
+  mkTy : Type -> FTerm -> Type
+  mkTy hole-ty ft =
+    foldr _`→_ hole-ty $ weakenFTys $ getFTys ft
 
-  weaken-f-tys : List Type -> List Type
-  weaken-f-tys tys = map (uncurry weaken) (zip (from 0 for length tys) tys)
+  mkTel : Nat -> Telescope
+  mkTel n = (\ i -> "f" & show i , vArg unknown) <$> from 0 for n
 
-  mk-ty : Type -> FTerm -> Type
-  mk-ty hole-ty ft =
-    foldr (\ { fn-ty rest -> pi (vArg fn-ty) (abs "_" rest) })
-    hole-ty (weaken-f-tys ∘ get-f-tys $ ft)
-
-  mk-tel : Nat -> Telescope
-  mk-tel n =
-    zip (zipWith _&_ (replicate n "f") (map show (from 0 for n)))
-      (replicate n (vArg unknown))
-
-  mk-ps : Nat -> List (Arg Pattern)
-  mk-ps n = map (vArg ∘ var) (reverse (from 0 for n))
+  mkPs : Nat -> List (Arg Pattern)
+  mkPs n = map (vArg ∘ var) (reverse (from 0 for n))
 
   pattern Finner `apply `unapply `ua `au =
     con₄ (quote MkF) `apply `unapply `ua `au
@@ -342,33 +317,33 @@ private
       hArg unknown ∷ hArg ty ∷
       vArg (pat-lam (clause tel ps inner ∷ []) []) ∷ args)
 
-  FT-to-Flippable : Type -> Type -> FTerm -> Type -> TC Term
-  FT-to-Flippable `A `B ft hole-ty = do
-    `apply <- FTerm-to-apply ft
-    `unapply <- FTerm-to-unapply ft
-    let fs = get-fs ft
-    let ty = mk-ty (weaken (length fs) hole-ty) ft 
+  ftToFlippable : Type -> Type -> FTerm -> Type -> TC Term
+  ftToFlippable `A `B ft hole-ty = do
+    `apply <- ftToApply ft
+    `unapply <- ftToUnapply ft
+    let fs = getFs ft
+    let ty = mkTy (weaken (length fs) hole-ty) ft
     let `A = weaken (length fs) `A
     let `B = weaken (length fs) `B
-    `ua <- FTerm-to-ua ft `A `B `unapply
-    `au <- FTerm-to-au ft `A `B `apply
+    `ua <- ftToUA ft `A `B `unapply
+    `au <- ftToAU ft `A `B `apply
     let `f = Finner `apply `unapply `ua `au
-    return (Fouter ty (mk-tel (num-eqns ft)) (mk-ps (num-eqns ft)) `f (map vArg fs))
+    return (Fouter ty (mkTel (numEqns ft)) (mkPs (numEqns ft)) `f (map vArg fs))
 
-F-tactic : {A B : Set} (apply : A -> B) -> Term -> TC ⊤
-F-tactic {A} {B} apply hole = do
-  `A <- quoteTC A
-  `B <- quoteTC B
-  `apply <- quoteTC apply
-  ensureNoMetas `A
-  ensureNoMetas `B
-  ensureNoMetas `apply
-  ft <- termToFTerm `apply
-  `hole-ty <- inferType hole
-  `flippable <- FT-to-Flippable `A `B ft `hole-ty
-  unify `flippable hole
+  FTactic : {A B : Set} (apply : A -> B) -> Tactic
+  FTactic {A} {B} apply hole = do
+    `A <- quoteTC A
+    `B <- quoteTC B
+    `apply <- quoteTC apply
+    ensureNoMetas `A
+    ensureNoMetas `B
+    ensureNoMetas `apply
+    ft <- termToFTerm `apply
+    `hole-ty <- inferType hole
+    `flippable <- ftToFlippable `A `B ft `hole-ty
+    unify `flippable hole
 
-F : {A B : Set} (apply : A -> B) {@(tactic F-tactic apply) f : A <-> B} -> A <-> B
+F : {A B : Set} (apply : A -> B) {@(tactic FTactic apply) f : A <-> B} -> A <-> B
 F {A} {B} _ {f} = f
 
 ----------------------------------------------------------------------
@@ -376,32 +351,32 @@ F {A} {B} _ {f} = f
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-idF : {A : Set} -> A <-> A
-idF = F \ { x -> x }
-
- -- Three different ways to compose two flippables:
-_*F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
-f *F g = F \ { (a , b) → a $| f |$ \ { c
-                       → b $| g |$ \ { d → (c , d) } } }
-
-_+F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
-f +F g = F (\ { (left  a) → a $| f |$ \ { c -> left  c }
-              ; (right b) → b $| g |$ \ { d -> right d } })
-
-_<>F_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
-f <>F g = F
-  \ { a -> a $| f |$ \ { b ->
-           b $| g |$ \ { c -> c }}}
-infixl 2 _<>F_
-
-composeF : forall {A C} B -> (A <-> B) -> (B <-> C) -> A <-> C
-composeF _ f g = f <>F g
-syntax composeF B f g = f < B >F g 
-
-F≡ : {A B : Set} -> A ≡ B -> A <-> B
-F≡ refl = F (\ { x -> x})
-
 private
+  idF : {A : Set} -> A <-> A
+  idF = F \ { x -> x }
+
+   -- Three different ways to compose two flippables:
+  _*F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
+  f *F g = F \ { (a , b) → a $| f |$ \ { c
+                         → b $| g |$ \ { d → (c , d) } } }
+
+  _+F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
+  f +F g = F (\ { (left  a) → a $| f |$ \ { c -> left  c }
+                ; (right b) → b $| g |$ \ { d -> right d } })
+
+  _<>F_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
+  f <>F g = F
+    \ { a -> a $| f |$ \ { b ->
+             b $| g |$ \ { c -> c }}}
+  infixl 2 _<>F_
+
+  composeF : forall {A C} B -> (A <-> B) -> (B <-> C) -> A <-> C
+  composeF _ f g = f <>F g
+  syntax composeF B f g = f < B >F g
+
+  F≡ : {A B : Set} -> A ≡ B -> A <-> B
+  F≡ refl = F (\ { x -> x})
+
   pair-swp : {A B : Set} -> A × B <-> B × A
   pair-swp = F \ { (a , b) → (b , a) }
 

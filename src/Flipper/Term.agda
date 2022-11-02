@@ -171,7 +171,7 @@ open Pack
 
 
 wrapAbs : (String -> Term -> Term) -> Term -> VarSet -> Term
-wrapAbs = slist-foldr 
+wrapAbs = slist-foldr
 
 packLamWrap : Term -> QCParser Term
 packLamWrap t ctx with pack ctx t
@@ -208,7 +208,7 @@ cpExtend nm (ctx , lvl) = left (((ctx -, nm) , lvl) , unit)
 {-# TERMINATING #-}
 cpLookup : String -> CParser Nat
 cpLookup nm ([]         , lvl) = right nm
-cpLookup nm ((ctx -, v) , lvl) with nm ==? v 
+cpLookup nm ((ctx -, v) , lvl) with nm ==? v
 ... | true  = left (((ctx -, v) , lvl) , zero)
 ... | false with cpLookup nm (ctx , lvl)
 ...   | left ((ctx , lvl) , x) = left (((ctx -, v) , lvl) , suc x)
@@ -241,3 +241,8 @@ cpGetDepth (ctx , lvl) = left ((ctx , lvl) , slist-length ctx)
 
 cpEmpty : CParser ⊤
 cpEmpty (_ , lvl) = left (([] , lvl) , unit)
+
+cpInTC : forall {A} -> CParser A -> TC A
+cpInTC cp with cp ([] , 0)
+... | left (_ , a) = pure a
+... | right err = typeErrorS err
