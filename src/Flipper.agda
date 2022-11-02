@@ -12,7 +12,7 @@ open import Flipper.SnocList
 open import Flipper.Pack
 
 
-infix 1 _<->_
+infix 0 _<->_
 record _<->_ (A B : Set) : Set where
   pattern
   constructor MkF
