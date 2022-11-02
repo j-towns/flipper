@@ -9,6 +9,7 @@ open import Builtin.Reflection
 
 open import Flipper.Term
 open import Flipper.SnocList
+open import Flipper.Pack
 
 
 infix 1 _<->_
