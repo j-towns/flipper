@@ -1,4 +1,4 @@
-module Flipper.Util where
+module Flipper.SnocList where
 
 open import Prelude
 

@@ -8,7 +8,7 @@ open import Tactic.Reflection.DeBruijn
 open import Builtin.Reflection
 
 open import Flipper.Term
-open import Flipper.Util
+open import Flipper.SnocList
 
 
 infix 1 _<->_

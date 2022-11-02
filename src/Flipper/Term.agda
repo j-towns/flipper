@@ -5,7 +5,7 @@ open import Container.Traversable
 
 open import Builtin.Reflection
 
-open import Flipper.Util
+open import Flipper.SnocList
 
 
 data Quant : Set where
