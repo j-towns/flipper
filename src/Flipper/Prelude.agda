@@ -17,4 +17,4 @@ composeF _ f g = f <> g
 syntax composeF B f g = f < B > g
 
 =F= : {A B : Set} -> A ≡ B -> A <-> B
-=F= refl = F \ { x -> x}
+=F= refl = F \ { x -> x }
