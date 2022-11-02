@@ -1,4 +1,4 @@
-module Flipper.Term where
+module Flipper.Parser where
 
 open import Prelude hiding (abs)
 open import Container.Traversable

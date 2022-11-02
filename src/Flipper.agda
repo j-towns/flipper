@@ -7,7 +7,7 @@ open import Tactic.Reflection.DeBruijn
 
 open import Builtin.Reflection
 
-open import Flipper.Term
+open import Flipper.Parser
 open import Flipper.SnocList
 open import Flipper.Pack
 

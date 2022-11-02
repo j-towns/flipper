@@ -7,7 +7,7 @@ module Flipper.Pack where
 
 open import Builtin.Reflection
 open import Prelude hiding (abs)
-open import Flipper.Term
+open import Flipper.Parser
 open import Flipper.SnocList
 
 
