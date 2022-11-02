@@ -1,5 +1,5 @@
 # Flipper
-Flipper is a small _reversible_ embedded domain specific language, implemented
+Flipper is a small _reversible_ language, implemented
 and embedded in Agda. Flipper aims to make it syntactically clear what the
 result of reversal will be, and supports many native Agda features including
 dependent types. For a brief introduction to Flipper and its capabilities, see
