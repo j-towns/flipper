@@ -8,5 +8,5 @@ literate Agda source code for the paper is in this repo, filename
 [short-paper.lagda](short-paper.lagda).
 
 ## Dependencies
-Flipper depends on Agda itself and Ulf Norell's
+Flipper is tested with Agda 2.6.3, and depends on Ulf Norell's
 [agda-prelude](https://github.com/UlfNorell/agda-prelude).
