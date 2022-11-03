@@ -263,12 +263,6 @@ private
       pure (pat-lam cs [])
   open cmp
 
-  ftToApply : FTerm -> TC Term
-  ftToApply ft = cpInTC $ cmp (quote _$|_|$_) (const id) ft
-
-  ftToUnapply : FTerm -> TC Term
-  ftToUnapply ft = cpInTC $ cmpF (quote _$|_|$_) (const id) ft
-
    -- Proof building
   base : (A B : Set) -> (unapply : B -> A) -> (b : B) -> unapply b ≡ unapply b
   base _ _ unapply b = refl
@@ -283,14 +277,6 @@ private
   `base `A `B `unapply depth outp =
     let weaken = weaken depth in
     def₄ (quote base) (weaken `A) (weaken `B) (weaken `unapply) outp
-
-  ftToUA : FTerm -> Type -> Type -> Term -> TC Term
-  ftToUA ft `A `B `unapply =
-    cpInTC $ cmp (quote _P|_|P_) (`base `A `B `unapply) ft
-
-  ftToAU : FTerm -> Type -> Type -> Term -> TC Term
-  ftToAU ft `A `B `apply =
-    cpInTC $ cmpF (quote _P|_|P_) (`base `B `A `apply) ft
 
   getFs : FTerm -> List Term
   getFs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ f _) _) -> f) eqns
@@ -320,15 +306,15 @@ private
 
   ftToFlippable : Type -> Type -> FTerm -> Type -> TC Term
   ftToFlippable `A `B ft hole-ty = do
-    `apply <- ftToApply ft
-    `unapply <- ftToUnapply ft
+    `apply   <- cpInTC $ cmp  (quote _$|_|$_) (const id) ft
+    `unapply <- cpInTC $ cmpF (quote _$|_|$_) (const id) ft
     let fs = getFs ft
-    let ty = mkTy (weaken (length fs) hole-ty) ft
     let `A = weaken (length fs) `A
     let `B = weaken (length fs) `B
-    `ua <- ftToUA ft `A `B `unapply
-    `au <- ftToAU ft `A `B `apply
+    `ua <- cpInTC $ cmp  (quote _P|_|P_) (`base `A `B `unapply) ft
+    `au <- cpInTC $ cmpF (quote _P|_|P_) (`base `B `A `apply)   ft
     let `f = Finner `apply `unapply `ua `au
+    let ty = mkTy (weaken (length fs) hole-ty) ft
     return (Fouter ty (mkTel (numEqns ft)) (mkPs (numEqns ft)) `f (map vArg fs))
 
   FTactic : {A B : Set} (apply : A -> B) -> Tactic
