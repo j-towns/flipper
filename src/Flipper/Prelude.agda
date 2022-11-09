@@ -8,8 +8,8 @@ id : {A : Set} -> A <-> A
 id = F \ { x -> x }
 
 _<>_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
-f <> g = F \ { a -> a $| f |$ \ { b ->
-                    b $| g |$ \ { c -> c }}}
+f <> g = F \ { a -> a ⟨ f ⟩ \ { b ->
+                    b ⟨ g ⟩ \ { c -> c }}}
 infixl 2 _<>_
 
 composeF : forall {A C} B -> (A <-> B) -> (B <-> C) -> A <-> C

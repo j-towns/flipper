@@ -26,8 +26,8 @@ open _<->_ public
 flip : {A B : Set} -> (A <-> B) -> B <-> A
 flip (MkF apply unapply ua au) = MkF unapply apply au ua
 
-_$|_|$_ : {A B C : Set} -> A -> (A <-> B) -> (B -> C) -> C
-a $| f |$ g = g (apply f a)
+_⟨_⟩_ : {A B C : Set} -> A -> (A <-> B) -> (B -> C) -> C
+a ⟨ f ⟩ g = g (apply f a)
 
 private
    -- Flippable syntax
@@ -76,7 +76,7 @@ private
   pattern ok-pat-lam cs = pat-lam cs []
   pattern ok-clause tel inp term = clause tel ((vArg inp) ∷ []) term
   pattern ok-body `A `B argpat rev-fn res-tel respat rest-term =
-    def (quote _$|_|$_) (
+    def (quote _⟨_⟩_) (
       hArg `A ∷
       hArg `B ∷
       hArg _ ∷
@@ -305,8 +305,8 @@ private
 
   ftToFlippable : Type -> Type -> FTerm -> Type -> TC Term
   ftToFlippable `A `B ft hole-ty = do
-    `apply   <- cpInTC $ cmp  (quote _$|_|$_) (const id) ft
-    `unapply <- cpInTC $ cmpF (quote _$|_|$_) (const id) ft
+    `apply   <- cpInTC $ cmp  (quote _⟨_⟩_) (const id) ft
+    `unapply <- cpInTC $ cmpF (quote _⟨_⟩_) (const id) ft
     let fs = getFs ft
     let `A = weaken (length fs) `A
     let `B = weaken (length fs) `B
@@ -343,17 +343,17 @@ private
 
    -- Three different ways to compose two flippables:
   _*F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
-  f *F g = F \ { (a , b) → a $| f |$ \ { c
-                         → b $| g |$ \ { d → (c , d) } } }
+  f *F g = F \ { (a , b) → a ⟨ f ⟩ \ { c
+                         → b ⟨ g ⟩ \ { d → (c , d) } } }
 
   _+F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
-  f +F g = F (\ { (left  a) → a $| f |$ \ { c -> left  c }
-                ; (right b) → b $| g |$ \ { d -> right d } })
+  f +F g = F (\ { (left  a) → a ⟨ f ⟩ \ { c -> left  c }
+                ; (right b) → b ⟨ g ⟩ \ { d -> right d } })
 
   _<>F_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
   f <>F g = F
-    \ { a -> a $| f |$ \ { b ->
-             b $| g |$ \ { c -> c }}}
+    \ { a -> a ⟨ f ⟩ \ { b ->
+             b ⟨ g ⟩ \ { c -> c }}}
   infixl 2 _<>F_
 
   composeF : forall {A C} B -> (A <-> B) -> (B <-> C) -> A <-> C
@@ -372,34 +372,34 @@ private
 
   uncurryF : {A B C : Set} -> (A -> B <-> C) -> A × B <-> A × C
   uncurryF f = F (\ {
-    (a , b) -> b $| f a |$ \ { c -> (a , c) }})
+    (a , b) -> b ⟨ f a ⟩ \ { c -> (a , c) }})
 
   uncurryF' : {A : Set} {B C : A -> Set} -> ((a : A) -> B a <-> C a) -> Σ A B <-> Σ A C
-  uncurryF' f = F \ { (d , b) → b $| f d |$ \ { c -> (d , c) } }
+  uncurryF' f = F \ { (d , b) → b ⟨ f d ⟩ \ { c -> (d , c) } }
 
   data Al : Set where
     `a `b `c `d : Al
 
   test-nested-sum : Either (Either Nat Nat) (Either Nat Nat) <-> Al × Nat
   test-nested-sum = F (\
-    { (left  (left  x)) → x $| flip idF |$ \ { x -> `a , x }
+    { (left  (left  x)) → x ⟨ flip idF ⟩ \ { x -> `a , x }
     ; (left  (right x)) → `b , x
     ; (right (left  x)) → `c , x
     ; (right (right x)) → `d , x })
 
   test-composed : Either (Nat × Nat) Nat <-> Either Nat (Nat × Nat)
   test-composed = F (
-    \ { (left (m , n)) -> m $| idF |$ \ { m' ->
-                          n $| idF |$ \ { n' -> right (n' , m') }}
+    \ { (left (m , n)) -> m ⟨ idF ⟩ \ { m' ->
+                          n ⟨ idF ⟩ \ { n' -> right (n' , m') }}
       ; (right x)      ->                       left x })
 
   test-dependent-types-in-context : {B C : Set} {A : B -> Set} -> (Σ B \ b -> (A b × C)) <-> (Σ B \ b -> (A b × C))
-  test-dependent-types-in-context = F \ { (b , a , c) → c $| idF |$ \ { c' -> (b , a , c') } }
+  test-dependent-types-in-context = F \ { (b , a , c) → c ⟨ idF ⟩ \ { c' -> (b , a , c') } }
 
   test-dependent-pair : forall {A B C} -> ((b : B) -> A <-> C b) ->
     (A × B) <-> Σ B C
   test-dependent-pair f =
-    F \ { (a , b) -> a $| f b |$ \ { c -> (b , c) }}
+    F \ { (a , b) -> a ⟨ f b ⟩ \ { c -> (b , c) }}
 
   test-empty-branch : ⊤ <-> Either ⊤ ⊥
   test-empty-branch = F \ { x -> left x }
@@ -407,11 +407,11 @@ private
    -- For some reason this has non-visible patterns in it:
   foldrF : forall {n A B} -> (A × B <-> A) -> A × Vec B n <-> A
   foldrF {zero}   f = F \ { (a , [] ) -> a }
-  foldrF {suc n}  f = F \ { (a , b ∷ bs) -> (a , bs  ) $| foldrF f  |$ \ { a ->
-                                            (a , b   ) $| f         |$ \ { a -> a } } }
+  foldrF {suc n}  f = F \ { (a , b ∷ bs) -> (a , bs  ) ⟨ foldrF f  ⟩ \ { a ->
+                                            (a , b   ) ⟨ f         ⟩ \ { a -> a } } }
 
   {-# TERMINATING #-}
   mapF : forall {A B} -> (A <-> B) -> List A <-> List B
   mapF f = F \ { [] -> []
-               ; (a ∷ as) -> a  $| f      |$ \ { b ->
-                             as $| mapF f |$ \ { bs -> b ∷ bs } } }
+               ; (a ∷ as) -> a  ⟨ f      ⟩ \ { b ->
+                             as ⟨ mapF f ⟩ \ { bs -> b ∷ bs } } }
