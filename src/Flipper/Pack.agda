@@ -3,6 +3,8 @@ module Flipper.Pack where
  -- equations in an outer Flippable expression. 
  -- These need to be abstracted because otherwise they are normalized/
  -- expanded, which breaks our automatically generated proofs.
+ -- Abstracting also means that we are able to move the terms, without
+ -- breaking free variables' de Bruijn indices.
 
 
 open import Builtin.Reflection

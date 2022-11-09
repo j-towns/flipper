@@ -8,16 +8,6 @@ open import Builtin.Reflection
 open import Flipper.SnocList
 
 
-data Quant : Set where
-  qzero qone : Quant
-
-data QVar : Set where
-  vv : Quant -> String -> QVar  -- visible
-  hv : QVar                     -- hidden, references will be replaced
-                                -- by `unknown`
-QContext : Set
-QContext = SnocList QVar
-
 Parser : Set -> Set -> Set -> Set
 Parser C E A = C -> Either (C × A) E
 
@@ -42,6 +32,16 @@ module _ {C E : Set} where
     ... | left (ctx , a) with f a
     ...   | pb = pb ctx
 
+data Quant : Set where
+  qzero qone : Quant
+
+data QVar : Set where
+  vv : Quant -> String -> QVar  -- visible
+  hv : QVar                     -- hidden, references will be replaced
+                                -- by `unknown`
+QContext : Set
+QContext = SnocList QVar
+
 QCParser : Set -> Set
 QCParser = Parser QContext (List ErrorPart)
 
@@ -53,7 +53,7 @@ qcpSError : forall {A} -> String -> QCParser A
 qcpSError error = qcpError [ strErr error ]
 
 qcpUse : Nat -> QCParser String
-qcpUse i       []                   = errS "Invalid variable lookup." -- this should be unreachable
+qcpUse i       []                   = errS "Internal Flipper error: invalid variable lookup."
 qcpUse zero    (ctx -, vv qzero nm) = errS ("Attempt to re-use used variable " & nm & ".")
 qcpUse zero    (ctx -, vv qone  nm) = left ((ctx -, vv qzero nm) , nm)
 qcpUse zero    (ctx -, hv)          = errS "Attempt to use hidden variable."
@@ -80,17 +80,16 @@ qcpEmpty _ = left ([] , unit)
 VarSet = SnocList String
 
 QC-to-VarSet : QContext -> VarSet
-QC-to-VarSet = slist-concatMap \ { (vv qzero _) → []
-                                 ; (vv qone nm) → [] -, nm
-                                 ; hv           → []
+QC-to-VarSet = slist-concatMap \ { (vv qone nm) → [] -, nm
+                                 ; _            → []
                                  }
 
 patVarLookup : Nat -> QCParser String
 patVarLookup v ctx with slist-index ctx v
-... | just (vv qzero nm) = right (strErr ("Internal Flipper error: reference to used variable " & nm & " in pattern.") ∷ [])
+... | just (vv qzero nm) = errS ("Internal Flipper error: reference to used variable " & nm & " in pattern.")
 ... | just (vv qone  nm) = left (ctx , nm)
-... | just hv = right (strErr "Reference to hidden variable in pattern." ∷ [])
-... | nothing = right (strErr "Internal Flipper error: invalid de Bruijn index in pattern." ∷ [])
+... | just hv = errS "Reference to hidden variable in pattern."
+... | nothing = errS "Internal Flipper error: invalid de Bruijn index in pattern."
 
 getVarSet : QCParser VarSet
 getVarSet ctx = left (ctx , QC-to-VarSet ctx)

@@ -1,6 +1,6 @@
 \pdfoutput=1 
-\documentclass[a4paper, twocolumn]{article}
-\usepackage[a4paper, margin=1in]{geometry}
+\documentclass[a4paper]{article}
+\usepackage[a4paper]{geometry}
 
 \usepackage{tikz}
 \usepackage[T1]{fontenc}
@@ -12,8 +12,8 @@ module FlipperLAFI where
 open import Prelude hiding (flip; uncurry)
 \end{code}
 
-\showboxdepth=\maxdimen
-\showboxbreadth=\maxdimen
+% \showboxdepth=\maxdimen
+% \showboxbreadth=\maxdimen
 
 \usepackage[font=small,labelfont=bf]{caption}
 \usepackage{j}
@@ -23,27 +23,14 @@ open import Prelude hiding (flip; uncurry)
 \usepackage{polytable}
 \newcommand{\rot}{\rotatebox[origin=B]{180}}
 
-\evensidemargin -0.23in  
-\oddsidemargin -0.23in 
-\setlength\headheight{10pt}
-\setlength\headsep{10pt}
-\setlength\textwidth{6.75in}
-\setlength\columnsep{0.25in}
-
 % \bdiv is similar to \bmod
 \DeclareRobustCommand\bdiv{%
   \nonscript\mskip-\medmuskip\mkern5mu%
   \mathbin{\operator@font div}\penalty900\mkern5mu%
   \nonscript\mskip-\medmuskip}
 
-\usepackage{listings}
-\lstset{
-  basicstyle=\small\ttfamily,
-  xleftmargin=10pt
-}
 \addbibresource{flipper.bib}
-\DeclareUnicodeCharacter{05A8}{\dg}
-\title{Verified Reversible Programming for
+\title{Verified Reversible Programming for\\
 Verified Lossless Compression}
 
 \author{James Townsend and Jan-Willem van de Meent\\
@@ -54,6 +41,24 @@ University of Amsterdam}
 \begin{document}
 
 \maketitle
+
+\begin{abstract}
+Lossless compression implementations typically contain two programs,
+an encoder and a decoder, which are required to be inverse to one
+another. We observe that a significant class of compression methods,
+based on asymmetric numeral systems (ANS), have shared structure
+between the encoder and decoder---the decoder program is the `reverse'
+of the encoder program---allowing both to be simultaneously specified
+by a single, reversible function. To exploit this, we have implemented
+a small reversible language, embedded in Agda, which we call
+`Flipper'. Agda supports formal verification of program properties,
+and the compiler for our reversible language (which is implemented as
+an Agda macro), produces not just an encoder/decoder pair of functions
+but also a proof that they are inverse to one another. Thus users of
+the language get formal verification `for free'. We give a small
+example use-case of Flipper in this paper, and plan to publish a full
+compression implementation soon.
+\end{abstract}
 
 It has been known since the work of Claude Shannon in the late 1940s
 that there is a deep connection between probabilistic modelling

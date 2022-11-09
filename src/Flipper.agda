@@ -57,7 +57,7 @@ private
 
   record FBranch : Set where
     pattern
-    constructor branch
+    constructor MkFBranch
     field
       inp  : FPat
       eqns : List FEqn
@@ -84,53 +84,56 @@ private
       vArg rev-fn ∷
       vArg (ok-pat-lam (ok-clause res-tel respat rest-term ∷ [])) ∷ [])
 
-  unArgVisible : forall {A : Set} -> List (Arg A) -> List A
-  unArgVisible as = unArg <$> filter isVisible as
+  `<-> : Term -> Term -> Term
+  `<-> = def₂ (quote _<->_)
 
   Parse : Set -> Set -> Set
   Parse A B = A -> QCParser B
 
-  prsArgPat      : Parse (Arg Pattern)        FPat
-  prsPat         : Parse Pattern              FPat
-  prsPatVar      : Parse Nat                  String
-  prsTermPat     : Parse Term                 FPat
-  prsArgsTermPat : Parse (List (Arg Term))    (List FPat)
-  prsTermVar     : Parse Nat                  String
-  prsTel         : Parse Telescope            ⊤
-  prsOp          : Parse (Term × Type × Type) FOp
-  prsEqn         : Parse (Type × Type × Term × Term × Telescope × Pattern) FEqn
-  prsBody        : Parse Term                 (List FEqn × FPat)
-  prsClause      : Parse Clause               FBranch
-  prsTerm        : Parse Term                 FTerm
+  ParseArgs : Set -> Set -> Set
+  ParseArgs A B = Parse (List (Arg A)) (List B)
 
-  prsArgPat (vArg p) = prsPat p
-  prsArgPat _        = qcpSError "Non-visible pattern."
-
-  prsPat (con c ps) = con c <$> traverse prsArgPat ps
-  prsPat (var x) = var <$> prsPatVar x
-  prsPat p = qcpError
-    (strErr "Patterns must either be variables or constructors, got "
-    ∷ pattErr p ∷ [])
-
-  prsPatVar = patVarLookup
+  prsArgs : forall {A B} -> Parse A B -> ParseArgs A B
+  prsArgs p []            = pure []
+  prsArgs p (vArg x ∷ as) = _∷_ <$> p x <*> prsArgs p as
+  prsArgs p (_      ∷ as) = prsArgs p as
 
   {-# TERMINATING #-}
-  prsTermPat (var₀ x) = var <$> prsTermVar x
+  prsPat         : Parse     Pattern              FPat
+  prsPatVar      : Parse     Nat                  String
+  prsArgsPat     : ParseArgs Pattern              FPat
+  prsTermPat     : Parse     Term                 FPat
+  prsArgsTermPat : ParseArgs Term                 FPat
+  prsTermVar     : Parse     Nat                  String
+  prsTel         : Parse     Telescope            ⊤
+  prsOp          : Parse     (Term × Type × Type) FOp
+  prsEqn         : Parse     (Type × Type × Term × Term × Telescope × Pattern) FEqn
+  prsBody        : Parse     Term                 (List FEqn × FPat)
+  prsClause      : Parse     Clause               FBranch
+  prsTerm        : Parse     Term                 FTerm
+
+  prsPat (con c ps) = con c <$> prsArgsPat ps
+  prsPat (var x)    = var <$> prsPatVar x
+  prsPat p          = qcpError
+    (strErr "Patterns must either be variables or constructors, got "
+    ∷ pattErr p ∷ [])
+  prsPatVar = patVarLookup
+  prsArgsPat = prsArgs prsPat
+
+  prsTermPat (var₀ x)     = var <$> prsTermVar x
   prsTermPat (con c args) = con c <$> prsArgsTermPat args
-  prsTermPat t = qcpError
+  prsTermPat t            = qcpError
     (strErr "Argument/output must be a variable or constructor, got " ∷
      termErr t ∷ [])
-
-  prsArgsTermPat args = traverse prsTermPat (unArgVisible args)
-
+  prsArgsTermPat = prsArgs prsTermPat
   prsTermVar = qcpUse
 
   prsTel [] = pure unit
   prsTel ((nm , vArg _) ∷ tel) = qcpExtend nm >> prsTel tel
-  prsTel ((_ , _) ∷ tel) = qcpHExtend >> prsTel tel
+  prsTel (_             ∷ tel) = qcpHExtend   >> prsTel tel
 
   prsOp (t , `A , `B) =
-    MkFOp <$> getVarSet <*> packLamWrap t <*> packPiWrap (def₂ (quote _<->_) `A `B)
+    MkFOp <$> getVarSet <*> packLamWrap t <*> packPiWrap (`<-> `A `B)
 
   prsEqn (`A , `B , argp , op , resTel , resp) = do
     argp <- prsTermPat argp
@@ -141,7 +144,7 @@ private
 
   prsBody (ok-body `A `B argp op resTel respat rest-term) = do
     eqn <- prsEqn (`A , `B , argp , op , resTel , respat)
-    (eqns , outp) <- prsBody rest-term
+    eqns , outp <- prsBody rest-term
     pure (eqn ∷ eqns , outp)
   prsBody t = [] ,_ <$> prsTermPat t
 
@@ -149,9 +152,9 @@ private
     qcpEmpty
     prsTel tel
     inp <- prsPat inp
-    (eqns , outp) <- prsBody term
+    eqns , outp <- prsBody term
     qcpCheckAllUsed
-    pure (branch inp eqns outp)
+    pure (MkFBranch inp eqns outp)
   prsClause c = qcpSError "Clauses must have exactly one bound pattern."
 
   prsTerm (ok-pat-lam cs) = do
@@ -193,14 +196,14 @@ private
 
   {-# TERMINATING #-}
   cmpTel (con c ps) = concat <$> traverse cmpTel ps
-  cmpTel (var nm) = cpExtend nm >> pure [ nm , vArg unknown ]
+  cmpTel (var nm)   = cpExtend nm >> pure [ nm , vArg unknown ]
 
   cmpPat (con c ps) = con c <$> traverse cmpArgPat ps
-  cmpPat (var nm) = var <$> cpLookup nm
+  cmpPat (var nm)   = var <$> cpLookup nm
   cmpArgPat p = vArg <$> cmpPat p
 
   cmpPatTerm (con c ps) = con c <$> traverse cmpPatArgTerm ps
-  cmpPatTerm (var nm) = var₀ <$> cpLookup nm
+  cmpPatTerm (var nm)   = var₀ <$> cpLookup nm
 
   cmpPatArgTerm p = vArg <$> cmpPatTerm p
 
@@ -217,13 +220,12 @@ private
   cmpEqnF (MkFEqn argp fn resp) = cmpEqn (MkFEqn resp fn argp)
 
   branchLength : FBranch -> Nat
-  branchLength (branch _ eqns _) = length eqns
+  branchLength (MkFBranch _ eqns _) = length eqns
 
   numEqns : FTerm -> Nat
   numEqns (MkFT bs) = sum $ map branchLength bs
 
-  module cmp (bodyTemplate : Name)
-    (baseTemplate : BaseTemplate) where
+  module cmp (bodyName : Name)(baseTemplate : BaseTemplate) where
     cmpBody    : Compile (List FEqn × FPat) Term
     cmpBodyF   : Compile (List FEqn × FPat) Term
     cmpBranch  : Compile FBranch            Clause
@@ -236,31 +238,29 @@ private
       cpDown
       (argp , fn , tel , resp) <- cmpEqn e
       rest <- cmpBody (eqns , outp)
-      pure (body bodyTemplate argp fn tel resp rest)
+      pure (body bodyName argp fn tel resp rest)
     cmpBody ([] , outp) = baseTemplate <$> cpGetDepth <*> cmpPatTerm outp
 
     cmpBodyF (e ∷ eqns , outp) = do
       (argp , fn , tel , resp) <- cmpEqnF e
       cpUp
       rest <- cmpBodyF (eqns , outp)
-      pure (body bodyTemplate argp (`flip fn) tel resp rest)
+      pure (body bodyName argp (`flip fn) tel resp rest)
     cmpBodyF ([] , outp) = baseTemplate <$> cpGetDepth <*> cmpPatTerm outp
 
-    cmpBranch (branch inp eqns outp) = cpEmpty >>
+    cmpBranch (MkFBranch inp eqns outp) = cpEmpty >>
       ok-clause <$> cmpTel inp <*> cmpPat inp <*> cmpBody (eqns , outp)
 
-    cmpBranchF (branch inp eqns outp) = cpEmpty >>
+    cmpBranchF (MkFBranch inp eqns outp) = cpEmpty >>
       ok-clause <$> cmpTel outp <*> cmpPat outp <*> cmpBodyF (reverse eqns , inp)
 
     cmp (MkFT bs) = do
       cpSetLevel (sum $ map branchLength bs)
-      cs <- traverse cmpBranch bs
-      pure (pat-lam cs [])
+      ok-pat-lam <$> traverse cmpBranch bs
 
     cmpF (MkFT bs) = do
       cpSetLevel 0
-      cs <- traverse cmpBranchF (reverse bs)
-      pure (pat-lam cs [])
+      ok-pat-lam <$> traverse cmpBranchF (reverse bs)
   open cmp
 
    -- Proof building
@@ -279,17 +279,16 @@ private
     def₄ (quote base) (weaken `A) (weaken `B) (weaken `unapply) outp
 
   getFs : FTerm -> List Term
-  getFs (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ f _) _) -> f) eqns
+  getFs (MkFT bs) = bs >>= \ (MkFBranch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ f _) _) -> f) eqns
 
   getFTys : FTerm -> List Type
-  getFTys (MkFT bs) = bs >>= \ (branch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ _ ty) _) -> ty) eqns
+  getFTys (MkFT bs) = bs >>= \ (MkFBranch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ _ ty) _) -> ty) eqns
 
   weakenFTys : List Type -> List Type
   weakenFTys tys = map (uncurry weaken) (zip (from 0 for length tys) tys)
 
   mkTy : Type -> FTerm -> Type
-  mkTy hole-ty ft =
-    foldr _`→_ hole-ty $ weakenFTys $ getFTys ft
+  mkTy hole-ty ft = foldr _`→_ hole-ty $ weakenFTys $ getFTys ft
 
   mkTel : Nat -> Telescope
   mkTel n = (\ i -> "f" & show i , vArg unknown) <$> from 0 for n
@@ -319,8 +318,8 @@ private
 
   FTactic : {A B : Set} (apply : A -> B) -> Tactic
   FTactic {A} {B} apply hole = do
-    `A <- quoteTC A
-    `B <- quoteTC B
+    `A     <- quoteTC A
+    `B     <- quoteTC B
     `apply <- quoteTC apply
     ensureNoMetas `A
     ensureNoMetas `B
@@ -404,3 +403,15 @@ private
 
   test-empty-branch : ⊤ <-> Either ⊤ ⊥
   test-empty-branch = F \ { x -> left x }
+
+   -- For some reason this has non-visible patterns in it:
+  foldrF : forall {n A B} -> (A × B <-> A) -> A × Vec B n <-> A
+  foldrF {zero}   f = F \ { (a , [] ) -> a }
+  foldrF {suc n}  f = F \ { (a , b ∷ bs) -> (a , bs  ) $| foldrF f  |$ \ { a ->
+                                            (a , b   ) $| f         |$ \ { a -> a } } }
+
+  {-# TERMINATING #-}
+  mapF : forall {A B} -> (A <-> B) -> List A <-> List B
+  mapF f = F \ { [] -> []
+               ; (a ∷ as) -> a  $| f      |$ \ { b ->
+                             as $| mapF f |$ \ { bs -> b ∷ bs } } }
