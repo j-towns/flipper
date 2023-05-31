@@ -279,10 +279,10 @@ private
     def₄ (quote base) (weaken `A) (weaken `B) (weaken `unapply) outp
 
   getFs : FTerm -> List Term
-  getFs (MkFT bs) = bs >>= \ (MkFBranch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ f _) _) -> f) eqns
+  getFs (MkFT bs) = FOp.tm ∘ FEqn.fn <$> (FBranch.eqns =<< bs)
 
   getFTys : FTerm -> List Type
-  getFTys (MkFT bs) = bs >>= \ (MkFBranch _ eqns _) -> map (\ (MkFEqn _ (MkFOp _ _ ty) _) -> ty) eqns
+  getFTys (MkFT bs) = FOp.ty ∘ FEqn.fn <$> (FBranch.eqns =<< bs)
 
   weakenFTys : List Type -> List Type
   weakenFTys tys = map (uncurry weaken) (zip (from 0 for length tys) tys)
