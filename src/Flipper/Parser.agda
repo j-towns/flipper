@@ -53,7 +53,7 @@ qcpSError : forall {A} -> String -> QCParser A
 qcpSError error = qcpError [ strErr error ]
 
 qcpUse : Nat -> QCParser String
-qcpUse i       []                   = errS "Internal Flipper error: invalid variable lookup."
+qcpUse _       []                   = errS "Internal Flipper error: invalid variable lookup."
 qcpUse zero    (ctx -, vv qzero nm) = errS ("Attempt to re-use used variable " & nm & ".")
 qcpUse zero    (ctx -, vv qone  nm) = left ((ctx -, vv qzero nm) , nm)
 qcpUse zero    (ctx -, hv)          = errS "Attempt to use hidden variable."
@@ -62,14 +62,14 @@ qcpUse (suc i) (ctx -, x) with qcpUse i ctx
 ... | right err = right err
 
 qcpExtend : String -> QCParser ⊤
-qcpExtend nm ctx = left ((ctx -, vv qone nm) , unit)
+qcpExtend nm ctx = left ((ctx -, vv qone nm) , _)
 
 qcpHExtend : QCParser ⊤
 qcpHExtend ctx = left ((ctx -, hv) , unit)
 
 qcpCheckAllUsed : QCParser ⊤
 qcpCheckAllUsed [] = left ([] , unit)
-qcpCheckAllUsed (ctx -, vv qone  nm) = errS ("Unused variable " & nm & ".")
+qcpCheckAllUsed (ctx -, vv qone nm) = errS ("Unused variable " & nm & ".")
 qcpCheckAllUsed (ctx -, v) with qcpCheckAllUsed ctx
 ... | left (ctx , unit) = left ((ctx -, v) , unit)
 ... | right error = right error

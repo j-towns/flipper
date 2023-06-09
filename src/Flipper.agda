@@ -19,8 +19,8 @@ record _<->_ (A B : Set) : Set where
   field
     apply   : A -> B
     unapply : B -> A
-    unapplyApply : (a : A) -> unapply (apply a) ≡ a
-    applyUnapply : (b : B) -> apply (unapply b) ≡ b
+    unapplyApply : ∀ a -> unapply (apply a) ≡ a
+    applyUnapply : ∀ b -> apply (unapply b) ≡ b
 open _<->_ public
 
 flip : {A B : Set} -> (A <-> B) -> B <-> A
@@ -169,7 +169,9 @@ private
   termToFTerm : Term -> TC FTerm
   termToFTerm t with prsTerm t []
   ... | left (_ , ft) = pure ft
-  ... | right error = typeError error
+  ... | right error = do
+    t' <- quoteTC t
+    typeError (error ++ (termErr t ∷ []))
 
   Compile : Set -> Set -> Set
   Compile A B = A -> CParser B
@@ -316,21 +318,24 @@ private
     let ty = mkTy (weaken (length fs) hole-ty) ft
     return (Fouter ty (mkTel (numEqns ft)) (mkPs (numEqns ft)) `f (map vArg fs))
 
+  quoteNoMetas : ∀ {a} {A : Set a} → A → TC Term
+  quoteNoMetas a = do
+    `a <- quoteTC a
+    ensureNoMetas `a
+    pure `a
+
   FTactic : {A B : Set} (apply : A -> B) -> Tactic
   FTactic {A} {B} apply hole = do
-    `A     <- quoteTC A
-    `B     <- quoteTC B
-    `apply <- quoteTC apply
-    ensureNoMetas `A
-    ensureNoMetas `B
-    ensureNoMetas `apply
+    `A     <- quoteNoMetas A
+    `B     <- quoteNoMetas B
+    `apply <- quoteNoMetas apply
     ft <- termToFTerm `apply
     `hole-ty <- inferType hole
     `flippable <- ftToFlippable `A `B ft `hole-ty
     unify `flippable hole
 
-F : {A B : Set} (apply : A -> B) {@(tactic FTactic apply) f : A <-> B} -> A <-> B
-F {A} {B} _ {f} = f
+F : forall {A B} (apply : A -> B) {@(tactic FTactic apply) f : A <-> B} -> A <-> B
+F apply {f} = f
 
 ----------------------------------------------------------------------
 ----------------------------- TESTS ----------------------------------
@@ -343,17 +348,19 @@ private
 
    -- Three different ways to compose two flippables:
   _*F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> A × B <-> C × D
-  f *F g = F \ { (a , b) → a ⟨ f ⟩ \ { c
-                         → b ⟨ g ⟩ \ { d → (c , d) } } }
+  f *F g = F \ where
+    (a , b) → a ⟨ f ⟩ \ { c
+            → b ⟨ g ⟩ \ { d → (c , d) } }
 
   _+F_ : {A B C D : Set} -> (A <-> C) -> (B <-> D) -> Either A B <-> Either C D
-  f +F g = F (\ { (left  a) → a ⟨ f ⟩ \ { c -> left  c }
-                ; (right b) → b ⟨ g ⟩ \ { d -> right d } })
+  f +F g = F \ where
+    (left  a) → a ⟨ f ⟩ \ { c → left  c }
+    (right b) → b ⟨ g ⟩ \ { d → right d }
 
   _<>F_ : {A B C : Set} -> (A <-> B) -> (B <-> C) -> A <-> C
-  f <>F g = F
-    \ { a -> a ⟨ f ⟩ \ { b ->
-             b ⟨ g ⟩ \ { c -> c }}}
+  f <>F g = F \ where
+    a -> a ⟨ f ⟩ \ { b ->
+         b ⟨ g ⟩ \ { c -> c } }
   infixl 2 _<>F_
 
   composeF : forall {A C} B -> (A <-> B) -> (B <-> C) -> A <-> C
@@ -361,7 +368,7 @@ private
   syntax composeF B f g = f < B >F g
 
   F≡ : {A B : Set} -> A ≡ B -> A <-> B
-  F≡ refl = F (\ { x -> x})
+  F≡ refl = F \ { x -> x }
 
   pair-swp : {A B : Set} -> A × B <-> B × A
   pair-swp = F \ { (a , b) → (b , a) }
@@ -415,3 +422,7 @@ private
   mapF f = F \ { [] -> []
                ; (a ∷ as) -> a  ⟨ f      ⟩ \ { b ->
                              as ⟨ mapF f ⟩ \ { bs -> b ∷ bs } } }
+
+
+  unitTest : ⊤ <-> ⊤
+  unitTest = F λ { unit → unit ⟨ idF ⟩ λ { h → {!!} } }
