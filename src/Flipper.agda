@@ -422,7 +422,3 @@ private
   mapF f = F \ { [] -> []
                ; (a ∷ as) -> a  ⟨ f      ⟩ \ { b ->
                              as ⟨ mapF f ⟩ \ { bs -> b ∷ bs } } }
-
-
-  unitTest : ⊤ <-> ⊤
-  unitTest = F λ { unit → unit ⟨ idF ⟩ λ { h → {!!} } }
